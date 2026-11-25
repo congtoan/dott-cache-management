@@ -29,7 +29,7 @@ Tạo ngày 2026-11-25 từ bản mới nhất trên VPS và trên PC.
 │   ├── config/settings*.py   ← SSH + WP config cho wp_cli_extract_all_urls.py
 │   ├── wp_cli_extract_all_urls.py          (A1) lấy toàn bộ URL bằng WP-CLI qua SSH
 │   ├── u1_compare_json_and_db_v2.py        (A4a) so JSON với DB, ra u1_urls_to_add/remove
-│   ├── u2_update_db_and_kv_v3.3.py         (A4b) cập nhật DB + KV
+│   ├── u2_update_db_and_kv_v3.4.py         (A4b) cập nhật DB + KV (v3.4: key KV dạng path)
 │   ├── KV_export_db_to_kv_json.py / KV_import_json_into_KV.py   (A3) đẩy KV lần đầu
 │   ├── m0_pc_s3_manifest_generator_v2_asyncio.py   (B0) liệt kê object trên S3
 │   └── m2_pc_check_missing_s3_v2.py        (B2) tìm URL thiếu trên S3

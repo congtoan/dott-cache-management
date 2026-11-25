@@ -72,7 +72,7 @@ flowchart TD
 | A3a | `pc/KV_export_db_to_kv_json.py` | PC | Đổi URL thành **path** (`/abc/`), bỏ trùng | `data/cache_urls.db` → `data/kv_export.json` |
 | A3b | `pc/KV_import_json_into_KV.py` | PC | Chia chunk 3000 phần tử, chạy `wrangler kv bulk put`, nghỉ 3 giây giữa các chunk | `data/kv_export.json`; cần `wrangler login` |
 | A4a | `pc/u1_compare_json_and_db_v2.py` | PC | **Định kỳ.** So URL trong JSON mới với DB. Không chuẩn hóa URL | `data/wp_url_jsons/` + `data/cache_urls.db` → `data/u1_urls_to_add.txt`, `data/u1_urls_to_remove.txt` |
-| A4b | `pc/u2_update_db_and_kv_v3.3.py` | PC | Backup DB vào `data/backups/`, thêm/xóa URL trên DB và KV. Có cờ `DRY_RUN`, `DISABLE_DB`, `DISABLE_KV` (sửa trong file) | 2 file u1 + DB; cần `wrangler login` |
+| A4b | `pc/u2_update_db_and_kv_v3.4.py` | PC | Backup DB vào `data/backups/`, thêm/xóa URL trên DB (URL đầy đủ) và KV (**key dạng path** như Worker, sửa F4 từ v3.4). Có cờ `DRY_RUN`, `DISABLE_DB`, `DISABLE_KV` (sửa trong file) | 2 file u1 + DB; cần `wrangler login` |
 
 ### B. Kiểm kê và vá thiếu (đối chiếu DB, disk, S3)
 | # | Tool | Ở đâu | Làm gì | Input / Output |
