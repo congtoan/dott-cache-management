@@ -6,9 +6,10 @@ Moi URL:  xoa 4 file cache cu tren disk -> trigger desktop + mobile (curl 127.0.
           -> kiem du 4 file moi -> upload S3 Chicago (utils.upload_files_to_s3) -> cap nhat sqlite.
 Log moi URL: [da_xong/tong] trang thai, thoi gian, ETA. Ghi them ra log/tmp_update_en_map_of_<ngay>.log
 
-Chay (tu thu muc cache-tools):
+Chay (tu thu muc cache-tools) - LUON chay trong screen:
   screen -S en-map-of
   python3 -u tmp_update_en_map_of.py              # chay het
+  (thoat screen KHONG dung tool: Ctrl+A roi D; vao lai: screen -r en-map-of)
   python3 -u tmp_update_en_map_of.py --limit 1    # thu 1 URL
 Dung an toan: Ctrl+C (xong URL hien tai roi thoat). Chay lai se TIEP TUC tu cho dung
 (bo qua URL da lam moi tu luc bat dau dot nay - moc thoi gian luu trong .tmp_update_en_map_of.start).
@@ -30,10 +31,12 @@ MOBILE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 10_3 like Mac OS X) AppleWebKit/
 stop = False
 def _stop(sig, frm):
     global stop
+    if not stop:  # chi log 1 lan du nhan Ctrl+C nhieu lan
+        log(f"!! Nhan tin hieu dung ({signal.Signals(sig).name}) - se thoat sau URL hien tai")
     stop = True
-    log("!! Nhan tin hieu dung - se thoat sau URL hien tai")
 signal.signal(signal.SIGINT, _stop)
 signal.signal(signal.SIGTERM, _stop)
+signal.signal(signal.SIGHUP, _stop)  # dong terminal/SSH khi chay ngoai screen -> van thoat an toan
 
 os.makedirs(os.path.dirname(LOG), exist_ok=True)
 _logf = open(LOG, "a", encoding="utf-8")
