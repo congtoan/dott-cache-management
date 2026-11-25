@@ -40,7 +40,9 @@ Tạo ngày 2026-11-25 từ bản mới nhất trên VPS và trên PC.
 │   └── backups/              ← u2 backup DB vào đây
 ├── docs/
 │   ├── pipeline.md           ← ⭐ tài liệu chính: kiến trúc, từng tool, thứ tự chạy, trạng thái đã kiểm tra
-│   ├── findings-2026-11-25.md← các lỗi/điểm cần sửa phát hiện khi rà soát
+│   ├── findings-2026-11-25.md← danh sách lỗi F1–F17 (đã sửa / còn mở) + bảng rà tool
+│   ├── design-server-only.md ← ⭐ kế hoạch pipeline mới chạy hoàn toàn trên server
+│   ├── cloudflare.md         ← token, KV API, Worker
 │   ├── dev-guide.md          ← quy ước khi viết tool mới
 │   ├── _Note_cache_tools_pipeline_ORIGINAL.md   bản ghi chú gốc (2026-10-20)
 │   └── _Note_cache_Tools.docx                   ghi chú gốc dạng Word (⚠️ có S3 key)
