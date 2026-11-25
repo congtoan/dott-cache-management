@@ -14,7 +14,7 @@ Chay (tu thu muc cache-tools) - LUON chay trong screen:
 Dung an toan: Ctrl+C (xong URL hien tai roi thoat). Chay lai se TIEP TUC tu cho dung
 (bo qua URL da lam moi tu luc bat dau dot nay - moc thoi gian luu trong .tmp_update_en_map_of.start).
 """
-import argparse, os, signal, sqlite3, subprocess, sys, time
+import argparse, os, signal, sqlite3, subprocess, sys, threading, time
 from datetime import datetime
 from urllib.parse import urlparse
 
@@ -40,10 +40,14 @@ signal.signal(signal.SIGHUP, _stop)  # dong terminal/SSH khi chay ngoai screen -
 
 os.makedirs(os.path.dirname(LOG), exist_ok=True)
 _logf = open(LOG, "a", encoding="utf-8")
+_lock = threading.Lock()       # bao ve iterator + bo dem tien do
+_log_lock = threading.Lock()
+_s3_lock = threading.Lock()    # boto3.client() tao tu default session khong an toan khi nhieu luong tao cung luc
 def log(msg):
     line = f"{datetime.now():%Y-%m-%d %H:%M:%S} {msg}"
-    print(line, flush=True)
-    _logf.write(line + "\n"); _logf.flush()
+    with _log_lock:
+        print(line, flush=True)
+        _logf.write(line + "\n"); _logf.flush()
 
 
 def db():
@@ -78,7 +82,8 @@ def process(url):
     missing = [os.path.basename(f) for f in files if not (os.path.exists(f) and os.path.getmtime(f) >= t0 - 1)]
     if missing:
         return False, f"http d={cd} m={cm}, thieu file: {','.join(missing)} (KHONG upload)"
-    res = upload_files_to_s3(files)
+    with _s3_lock:  # upload chi ~0.5s, phan nang (PHP dung trang) van chay song song
+        res = upload_files_to_s3(files)
     bad = [r for r in res if not r.get("ok")]
     if bad:
         return False, f"upload loi {len(bad)}/{len(res)}: {bad[0].get('error')}"
@@ -88,7 +93,8 @@ def process(url):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0, help="chi xu ly N URL (de thu)")
-    ap.add_argument("--sleep", type=float, default=0.5, help="nghi giua cac URL (giay)")
+    ap.add_argument("--sleep", type=float, default=0.0, help="nghi giua cac URL (giay), moi luong")
+    ap.add_argument("--workers", type=int, default=2, help="so luong song song (mac dinh 2)")
     a = ap.parse_args()
 
     if not os.path.exists(START_FILE):
@@ -107,32 +113,49 @@ def main():
     log(f"=== BAT DAU: tong {total} URL /en/map-of-*/ | da xong tu dot {datetime.fromtimestamp(start_ts):%Y-%m-%d %H:%M}: {done} "
         f"| lan nay xu ly: {len(todo)} | log: {LOG}")
 
-    ok_n = fail_n = 0
+    st = {"ok": 0, "fail": 0, "done": done, "n": 0}
     t_run = time.time()
-    for i, (uid, url) in enumerate(todo, 1):
-        if stop:
-            break
-        t = time.time()
-        try:
-            ok, note = process(url)
-        except Exception as e:  # noqa
-            ok, note = False, f"loi: {e}"
-        if ok:
-            ok_n += 1
-            done += 1
-            for _ in range(5):
-                try:
-                    c = db(); c.execute("UPDATE urls SET cached=1, last_update=? WHERE id=?", (int(time.time()), uid)); c.commit(); c.close()
-                    break
-                except sqlite3.OperationalError as e:
-                    log(f"   (db ban, thu lai: {e})"); time.sleep(2)
-        else:
-            fail_n += 1
-        avg = (time.time() - t_run) / i
-        eta = avg * (len(todo) - i)
-        log(f"[{done}/{total}] {'OK  ' if ok else 'FAIL'} {time.time()-t:4.1f}s  {urlparse(url).path}  ({note})"
-            f"  | lan nay ok={ok_n} loi={fail_n} | ETA {int(eta//3600)}h{int(eta%3600//60):02d}m")
-        time.sleep(a.sleep)
+    it = iter(todo)
+
+    def worker(wid):
+        while not stop:
+            with _lock:
+                nxt = next(it, None)
+            if nxt is None:
+                return
+            uid, url = nxt
+            t = time.time()
+            try:
+                ok, note = process(url)
+            except Exception as e:  # noqa
+                ok, note = False, f"loi: {e}"
+            if ok:
+                for _ in range(5):
+                    try:
+                        c = db(); c.execute("UPDATE urls SET cached=1, last_update=? WHERE id=?", (int(time.time()), uid)); c.commit(); c.close()
+                        break
+                    except sqlite3.OperationalError as e:
+                        log(f"   (db ban, thu lai: {e})"); time.sleep(2)
+            with _lock:
+                st["n"] += 1
+                if ok:
+                    st["ok"] += 1; st["done"] += 1
+                else:
+                    st["fail"] += 1
+                eta = (time.time() - t_run) / st["n"] * (len(todo) - st["n"])
+                msg = (f"[{st['done']}/{total}] w{wid} {'OK  ' if ok else 'FAIL'} {time.time()-t:4.1f}s  {urlparse(url).path}  ({note})"
+                       f"  | lan nay ok={st['ok']} loi={st['fail']} | ETA {int(eta//3600)}h{int(eta%3600//60):02d}m")
+            log(msg)
+            if a.sleep:
+                time.sleep(a.sleep)
+
+    log(f"    so luong: {a.workers} | nghi giua URL: {a.sleep}s")
+    threads = [threading.Thread(target=worker, args=(w + 1,), daemon=True) for w in range(a.workers)]
+    for th in threads:
+        th.start()
+    while any(th.is_alive() for th in threads):  # cho trong vong lap de Ctrl+C van duoc xu ly
+        time.sleep(0.5)
+    ok_n, fail_n, done = st["ok"], st["fail"], st["done"]
 
     log(f"=== KET THUC: lan nay ok={ok_n} loi={fail_n} | tien do {done}/{total}"
         + (" | DA XONG TOAN BO - co the xoa file .tmp_update_en_map_of.start" if done >= total else ""))
