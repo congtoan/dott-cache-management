@@ -1,0 +1,23 @@
+# Secrets - KHONG BAO GIO commit
+secrets.json
+**/secrets.json
+*.pickle
+.env
+
+# Ghi chu goc co chua S3 key dang plain text
+docs/_Note_cache_Tools.docx
+
+# Du lieu sinh ra / ban chup tu VPS (tai lai bang lenh trong README)
+data/*
+!data/.gitkeep
+
+# Log & output tam
+*.log
+s3_manifest_v2_log_*.txt
+missing_*.txt
+redis_error_pages.txt
+
+# Python
+__pycache__/
+*.pyc
+.venv/

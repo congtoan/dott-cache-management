@@ -1,0 +1,5 @@
+# Script chay tren Linux (VPS) phai giu LF
+* text=auto eol=lf
+*.docx binary
+*.db binary
+*.zip binary
