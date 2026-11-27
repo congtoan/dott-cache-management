@@ -12,9 +12,10 @@ Cloudflare Worker phục vụ HTML từ S3 cho khách ở xa, khách gần đi t
 
 > **Bắt đầu ở đâu:**
 > 1. [HANDOFF.md](HANDOFF.md): trạng thái hiện tại, việc tiếp theo, quy tắc an toàn.
-> 2. [docs/HISTORY.md](docs/HISTORY.md): lịch sử phát triển, vì sao đổi hướng, những điều từng hiểu sai.
-> 3. [docs/design-server-only.md](docs/design-server-only.md): thiết kế v2.
-> 4. [docs/rollout-log.md](docs/rollout-log.md): nhật ký từng giai đoạn.
+> 2. [docs/SUMMARY-2026-11-27.md](docs/SUMMARY-2026-11-27.md): tổng kết đợt prototype (tt-core, sticky 3.2.0, một bản HTML, rocket-nginx, Go uploader, prefork) kèm số đo.
+> 3. [docs/HISTORY.md](docs/HISTORY.md): lịch sử phát triển, vì sao đổi hướng, những điều từng hiểu sai.
+> 4. [docs/design-server-only.md](docs/design-server-only.md): thiết kế v2.
+> 5. [docs/rollout-log.md](docs/rollout-log.md): nhật ký từng giai đoạn.
 
 ## Nhánh và tag
 | | |
@@ -32,7 +33,10 @@ Repo **private**. Trên PC, nhánh `v2` là git worktree tại `D:\Claude\2026-1
   - mu-plugin một bản HTML;
   - tt-core;
   - rocket-nginx.
-- Tất cả prototype mới test trên **php81.congtoan.net** với bucket test.
+- Tất cả prototype mới test trên **php81.congtoan.net** với bucket test. Số đo chính:
+  - một bản HTML cho mọi thiết bị: mỗi URL 1 lần render, 2 file thay vì 4;
+  - Go uploader: 42,9 URL/s lên 2 bucket;
+  - prefork: 1.024 URL trong 73 s, so với 942 s qua HTTP.
 - **Production vẫn chạy pipeline cũ.** Chưa có service `dott-cache` chạy nền.
 - Việc tiếp theo: service có hàng đợi (HANDOFF mục 5).
 
@@ -49,6 +53,7 @@ theme/                  ← tt-core: engine build JS, module vi/en, functions.ph
 tools/prefork/          ← render hàng loạt bằng fork, ghi cache WP Rocket thật
 tools/lab-2026-11-27/   ← script đo/thử dùng cho findings (chỉ đọc)
 docs/
+  SUMMARY-2026-11-27.md              ⭐ tổng kết đợt prototype, số đo, việc tiếp theo
   HISTORY.md                         lịch sử phát triển
   design-server-only.md              ⭐ thiết kế v2 (mục 5b–5c: một bản HTML, nhiều đích S3, đổi version CSS/JS)
   design-tt-core.md                  thiết kế tt-core

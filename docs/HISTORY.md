@@ -52,6 +52,10 @@ Commit `cce36f6`. Xem [findings-php-render-2026-11-27.md](findings-php-render-20
 - mu-plugin **`dott-single-cache`** (`3d57b66`): một file cache cho cả desktop và mobile. Đã cài trên php81, chưa cài production.
 - **Prefork ghi cache thật** (`406dfe9`, tag `v2-prototypes-2026-11-27`): 1.024 URL trong 73 s, so với 942 s khi render qua HTTP.
 
+### 2026-11-28: tổng kết
+- [SUMMARY-2026-11-27.md](SUMMARY-2026-11-27.md) gom lại toàn bộ đợt prototype: tt-core, sticky 3.2.0, một bản HTML, rocket-nginx, Go uploader, prefork, kèm số đo và việc tiếp theo.
+- GitHub Release đầu tiên được tạo trên tag `v2-prototypes-2026-11-27`. Release chỉ có ghi chú, không kèm file.
+
 ## Những điều từng hiểu sai (đã đính chính)
 Agent mới đọc tài liệu cũ nên biết các điểm này để khỏi lặp lại:
 - "fail2ban đã tắt" → **sai**, nó vẫn chạy. Jail `sshd` nên giữ. Jail nginx vô tác dụng vì khách đi qua Cloudflare.
@@ -73,4 +77,4 @@ Quy ước tag về sau:
 - `v2-phaseN` khi xong một giai đoạn trong lộ trình (design mục 14);
 - `v2.0.0` khi service chạy production ổn định, lúc đó merge `v2` vào `main`.
 
-Không tạo GitHub Release, vì repo private và không có file build để phân phối. Tag là đủ.
+GitHub Release chỉ tạo cho mốc lớn (như `v2-prototypes-2026-11-27`, sau này là `v2.0.0`). Release chỉ có ghi chú, không kèm binary: binary Go được build trên VPS phụ.
