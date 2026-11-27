@@ -111,6 +111,7 @@ Header S3 phải giữ khi upload: `ContentType: text/html`, `CacheControl: publ
 - PHP CLI: `opcache.file_cache` gây **segfault**, không dùng. Chạy dưới user site: `runuser -u diaocthDP4f -- php ...`. Khi đo render phải đặt `DONOTCACHEPAGE`.
 - Build Go trên VPS phụ: `GOMEMLIMIT=200MiB GOFLAGS=-p=1 go build`. Lần đầu tốn khoảng 220 MB RAM và 77 giây.
 - Cloudflare KV bulk delete có thể sót key dù báo 0 lỗi, nên **luôn list lại toàn bộ để kiểm tra**. Dữ liệu đọc ra có độ trễ khoảng 60 giây.
+- **Multisite và WP-CLI:** nếu plugin có header `Network: True`, lệnh `wp --url=<site> plugin activate` sẽ bật plugin cho **toàn mạng**. Ngày 27/11, `ct-site-enhancer` bị bật như vậy và làm blog 1 và 2 của php81 lỗi 500 (đã tắt). Sau mỗi thay đổi, kiểm tra mọi blog.
 - Không in mật khẩu hay token ra hội thoại. `secrets.json` và skill `vps-diaocthongthai` đều đã gitignored.
 
 ## 7. Thư mục và tài liệu liên quan

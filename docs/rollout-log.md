@@ -177,5 +177,25 @@ Mục đích: mô phỏng diaocthongthai.com để test tt-core, cache một b�
   - Cache `/tttest/` bị xóa và tạo lại nhiều lần. Hiện đang là bản do prefork tạo.
 - **Chưa thử trên production.** Số đo php81 không có Redis, nên phải đo lại trên production trước khi kết luận.
 
+### Sửa lỗi 500 trên php81 `/` và `/en/` (28/11, chủ site đồng ý)
+- **Triệu chứng:**
+  - blog 1 `/`, blog 2 `/en/` và `/wp-admin/` báo "There has been a critical error";
+  - `/tttest/` và `/tttest-en/` vẫn chạy bình thường.
+- **Nguyên nhân (lỗi của Claude khi dựng môi trường test):**
+  - Lệnh `wp --url=.../tttest/ plugin activate ct-site-enhancer` bật plugin này cho **toàn mạng**, vì plugin có header `Network: True`. WP-CLI tự chuyển sang bật cấp mạng.
+  - Plugin này trùng hàm `dynamic_upload_dir()` với theme `generatepress-child` của blog 1 và 2, nên 2 site đó bị fatal.
+  - Lỗi có từ 27/11 khoảng 21:39.
+- **Sửa:**
+  - Chạy `wp plugin deactivate --network ct-site-enhancer`.
+  - Backup option ở `/root/php81-active_sitewide_plugins.bak-2026-11-28.json`.
+  - Sau khi sửa: `/`, `/en/`, `/tttest/`, `/tttest-en/` đều trả 200, không có fatal mới.
+  - Đổi lại, 2 site test không còn favicon, user agent và hook comment của plugin này. Phần cache, tt-core và sticky không phụ thuộc vào plugin.
+- **Bài học:**
+  - Trước khi bật plugin trên một site con, kiểm tra header `Network:` của plugin.
+  - Sau mỗi thay đổi trên multisite, kiểm tra **mọi** blog, không chỉ site đang test.
+- Kiểm tra thêm khi tìm lỗi:
+  - Plugin sticky 3.2.0 đưa module vào tt-core bằng action `tt_core_modules` (code đưa thẳng vào lúc build). Vì vậy `uploads/tt-core/<theme>/modules/` trống là đúng.
+  - `core.js` của cả vi (`50d59ad81d`) và en đều có module `ct-multi-sticky-sidebar`.
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.
