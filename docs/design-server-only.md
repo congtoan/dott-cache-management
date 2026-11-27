@@ -203,6 +203,13 @@ Chủ site chốt hướng (27/11):
 
 Các số trên là **ước tính**, sẽ đo lại trên php81 (mục 14b) và với bucket test.
 
+**Số đo thật (27/11, bản thử Go, 1.024 URL php81 → 2 bucket test, chi tiết ở rollout-log):**
+- Đã có cache: 22,6 URL/s với 8 luồng mỗi đích, **42,9 URL/s với 16 luồng**. Tăng tuyến tính, giới hạn bởi Chicago.
+- Lấy HTML qua nginx tĩnh: p50 2 ms.
+- Phải render: 1,1 URL/s ở 1 slot.
+
+Như vậy upload hàng loạt 60 nghìn URL (khi đã có cache) khoảng 23 phút. Nếu phải render lại toàn site thì khoảng 15 giờ ở 1 slot: đây là chỗ prefork có ích.
+
 ### Gom về một bản HTML: WP Rocket tạo file gì, và các bước chuyển
 
 Đã đo trên php81 (27/11):

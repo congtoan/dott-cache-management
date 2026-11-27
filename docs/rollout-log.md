@@ -139,5 +139,24 @@ Mục đích: mô phỏng diaocthongthai.com để test tt-core, cache một b�
 - Đã thử từ VPS phụ bằng `curl --aws-sigv4`: list `congtoanphp` us-ord-1 OK (0,69 s), eu-central-1 OK (0,50 s). Key được đưa vào curl qua file config tạm, không lộ trên `ps`.
 - Claude trên VPS phụ: đã thêm luật cấm `Read(/etc/dott-cache/**)`, `Bash(cat /etc/dott-cache/*)`, `Bash(*/etc/dott-cache/*)` vào `/root/.claude/settings.json` (siết quyền, có backup `.bak-2026-11-27`).
 
+### Bản thử Go uploader `dott-cache upload` (27/11 khuya)
+- Code: `cmd/dott-cache`, `internal/s3` (tự ký SigV4, chỉ dùng thư viện chuẩn), `internal/origin`. Binary nằm ở `/opt/dott-cache/bin/dott-cache` trên VPS phụ (9,5 MB), build bằng Go 1.26.8 với `GOMEMLIMIT=200MiB`. Chạy bằng `systemd-run -p MemoryMax=150M`.
+- Luồng xử lý: lấy HTML từ origin **một lần** (gọi thẳng IP 45.77.32.177, kiểm tra SPKI pin, không gửi `Accept-Encoding`, phải có `cached@`), rồi đẩy song song lên mọi đích S3. Mỗi đích có pool riêng, PUT có `Content-MD5`, kiểm tra ETag bằng MD5, không gửi `Expect: 100-continue`.
+- Cấu hình test: `/etc/dott-cache/upload-test.json`. Origin là php81 (SPKI pin `snOoK9P5…IXZU=`, Cloudflare Origin cert, hạn 2038). 2 đích `congtoanphp` us-ord-1 và eu-central-1, prefix `_cache_html/`. Danh sách path: `/opt/dott-cache/test/paths-tttest.txt` (1.024 URL của `/tttest/`).
+- Đối chiếu: object `_cache_html/tttest/hello-world/index-https.html` trên cả 2 bucket có md5 **giống file trên đĩa**, `Content-Type: text/html`, `Cache-Control: public, max-age=31536000` (giống tool cũ).
+
+| Lần chạy | Luồng lấy HTML / PUT mỗi đích | Tổng | URL/giây | Lấy HTML p50 | PUT p50 Frankfurt / Chicago | Lỗi | Tải VPS chính |
+|---|---|---|---|---|---|---|---|
+| 10 URL đầu (phải render) | 1 / 8 | 8,9 s | 1,1 | 837 ms | 248 / 301 ms | 0 | không đổi |
+| 1.024 URL, **1.014 trang phải render** | 1 / 8 | **942,8 s** (15,7 phút) | 1,1 | 849 ms (p95 1,3 s) | 348 / 447 ms | 0 | load 1 phút lên khoảng 1,1–1,2 |
+| 1.024 URL, đã có cache (nginx HIT) | 4 / 8 | **45,2 s** | 22,6 | **2 ms** | 230 / 328 ms | 0 | không đổi (0,45 → 0,35) |
+| 1.024 URL, đã có cache | 4 / 16 | **23,9 s** | **42,9** | 2 ms | 232 / 343 ms | 0 | không đổi; RAM VPS phụ còn 558 MB trống |
+
+**Kết luận:**
+- Khi đã có cache, tốc độ **tăng tuyến tính theo số luồng PUT** và giới hạn bởi Chicago (khoảng 1,5 RTT mỗi PUT). Với 16 luồng mỗi đích: 60 nghìn URL × 2 đích khoảng **23 phút**. Tool cũ cần khoảng 65 giờ.
+- Lấy HTML qua nginx tĩnh gần như miễn phí (2 ms, không đụng PHP). Vì vậy rocket-nginx kết hợp một bản HTML là điều kiện để upload hàng loạt nhanh mà không tốn tải VPS chính.
+- Khi phải render, nút cổ chai là PHP: khoảng 0,85 s mỗi trang ở 1 slot (khoảng 70 trang/phút), và load VPS chính khoảng 1,1. Đây là phần prefork có thể rút ngắn. Hiện chỉ cần khi render lại toàn site.
+- Object test (1.024 trang × 2 bucket) **vẫn để trên bucket test** để dùng cho bước tiếp theo. Dọn bằng `dott-cache delete -config ... -paths ...`.
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.
