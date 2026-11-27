@@ -1,227 +1,336 @@
-# Thiết kế pipeline cache server-only – bản nháp v1 (2026-11-25)
+# Thiết kế Cache System mới – bản nháp v2 (2026-11-27): chia 2 máy, viết bằng Go
 
-> Mục tiêu: **mọi thứ chạy trên VPS, tự động hoàn toàn**. Không còn bước chạy tay trên PC, không chép file DB qua lại.
-> Bản này để thảo luận; chưa có code. Các lỗi F được nhắc tới nằm trong [findings-2026-11-25.md](findings-2026-11-25.md).
+> **Mục tiêu:** chạy tự động hoàn toàn, không còn bước chạy tay trên PC. Phần điều phối chuyển sang **VPS phụ `claude-control`** để giảm tải cho VPS chính.
+> Bản này vẫn để thảo luận, chưa có code. Các lỗi F được nhắc tới nằm trong [findings-2026-11-25.md](findings-2026-11-25.md).
+> Bản v1 (mọi thứ trên VPS chính, Python + MariaDB) vẫn xem được trong lịch sử git của file này (commit `ca53a57` trở về trước).
+
+## 0. Khác gì so với v1
+
+| Hạng mục | v1 (2026-11-25) | v2 (bản này) |
+|---|---|---|
+| Nơi chạy worker, lịch, đối soát | VPS chính | **VPS phụ** (139.180.158.221) |
+| Ngôn ngữ | Python (boto3, pymysql, psutil) | **Go**: một file binary, RAM khoảng 15–40 MB |
+| Lưu trạng thái | MariaDB `dott_cache` trên VPS chính | **SQLite (WAL) trên VPS phụ**. Chỉ một tiến trình Go ghi nên không còn lỗi khóa. Trên VPS chính chỉ còn một bảng sự kiện nhỏ |
+| Lấy HTML để upload S3 | Đọc file trên đĩa (127.0.0.1) | **Gọi HTTP tới origin** và nhận đúng file cache tĩnh do nginx phục vụ ([mục 5](#5-upload-html-lên-s3-khi-file-cache-nằm-trên-vps-chính)) |
+| Biết URL nào thay đổi | mu-plugin INSERT vào MariaDB, worker đọc trực tiếp | mu-plugin INSERT vào bảng sự kiện, **VPS phụ hỏi qua REST** (`/wp-json/dott-cache/v1/...`) |
+| Đo tải để tạm dừng | `psutil` trên chính máy chạy | **Netdata API** của VPS chính, thời gian render, dự phòng bằng `ssh main` ([mục 6](#6-tự-điều-tiết-theo-tải-vps-chính)) |
+| Báo cáo | Chưa chọn kênh | **Telegram** (giống `/root/health` trên VPS phụ) |
+
+Các quyết định của chủ site (25–27/11):
+- Thông báo qua Telegram.
+- Khi bấm "Clear all cache": mặc định chỉ xóa trên server, **không xóa S3**.
+- `/es/` bỏ qua.
+- **Không** upload HTML lên bucket Singapore.
+- Dùng repo `dott-cache-management`. Code mới nằm ở `D:\Claude\2026-11-26 Cache System NEW - Server only`. Trên server: `/opt/dott-cache` (VPS phụ) và `/root/tool/diaocthongthai.com/cache-system` (phần nhỏ còn lại trên VPS chính, nếu có).
 
 ## 1. Nguyên tắc
 
-1. **Một nguồn sự thật cho trạng thái cache**: bảng trong MariaDB trên VPS (thay cho SQLite và bản sao trên PC).
-2. **Hướng sự kiện trước, quét định kỳ sau.** Thay đổi trên WordPress được đưa vào **hàng đợi** ngay lập tức; quét định kỳ chỉ làm lưới an toàn.
-3. **Chỉ một tiến trình gọi PHP để tạo cache** (`dott-cache-worker`), có giới hạn tốc độ và tự lùi lại khi server bận. Không còn nhiều cron cùng curl đè lên nhau.
-4. **Kiểm tra sau từng bước** (F13, F17): trigger xong phải thấy đủ 4 file mới; upload xong phải thấy `ok`; ghi/xóa KV xong phải list lại.
-5. **Không làm chậm WordPress**: hook PHP chỉ INSERT vào hàng đợi, không gọi mạng.
-6. **Giữ nguyên Worker Cloudflare** (`thongthai-cache-v7.js`) và cấu trúc S3 hiện tại; KV tiếp tục dùng key dạng path (đã sửa F4).
-7. **Tài nguyên có hạn mức**: chạy bằng systemd với `MemoryMax`, `Nice`, `IOSchedulingClass=idle`; VPS chỉ có 2 GB RAM và còn phục vụ 3 site.
+1. **VPS chính chỉ làm những việc buộc phải làm ở đó:** render PHP (WP Rocket ghi file cache), phục vụ file, ghi sự kiện. Mọi việc còn lại (lập lịch, hàng đợi, S3, KV, đối soát, báo cáo) chạy ở VPS phụ.
+2. **VPS phụ là "bộ não", không nằm trên đường phục vụ khách.** Nếu VPS phụ chết, website vẫn chạy bình thường (WP Rocket trên VPS chính, S3 và Worker Cloudflare vẫn như cũ); chỉ ngừng cập nhật S3/KV cho tới khi VPS phụ sống lại. Hàng đợi sự kiện vẫn được giữ trên VPS chính, nên không mất việc.
+3. **Hướng sự kiện trước, quét định kỳ sau** (giống v1).
+4. **Một tiến trình duy nhất tạo tải lên VPS chính.** Mọi request render đi qua một bộ giới hạn chung (mặc định 1–2 request cùng lúc). Upload S3 và gọi KV thì được chạy song song nhiều hơn, vì chúng không tốn tài nguyên VPS chính.
+5. **Kiểm tra sau từng bước** (F13, F17).
+6. **Không làm chậm WordPress:** hook PHP chỉ INSERT một dòng, không gọi mạng.
+7. **Giữ nguyên Worker Cloudflare** (`thongthai-cache-v7.js`), cấu trúc S3 `_cache_html/` và key KV dạng path (đã sửa F4).
+8. **Tôn trọng ngân sách RAM của VPS phụ:** Claude Remote Control dùng khoảng 250–400 MB. Mọi service mới tổng cộng **dưới 200 MB**, luôn đặt `MemoryMax`. Không đụng `claude-rc.service`.
 
-## 2. Kiến trúc tổng thể
+## 2. Chia việc giữa hai máy
 
-```
-                    ┌────────────────────────── WordPress (PHP-FPM) ──────────────────────────┐
-                    │  mu-plugin dott-cache-queue.php                                          │
-                    │   • after_rocket_clean_post / after_rocket_clean_files (WP Rocket purge) │
-                    │   • transition_post_status (publish / unpublish / trash)                 │
-                    │   • post_updated khi slug đổi (URL cũ → gỡ, URL mới → thêm)              │
-                    │  → INSERT INTO dott_cache.queue (chỉ 1 câu SQL, không gọi mạng)          │
-                    └──────────────────────────────┬───────────────────────────────────────────┘
-                                                   │
-   ┌──────────────── url_sync (timer 15') ─────────┤          ┌──────── pins (thay 2 cron cũ) ────────┐
-   │ đọc thai_posts / thai_2_posts có thay đổi     │          │ URL ưu tiên làm mới định kỳ           │
-   │ (lưới an toàn khi hook bị bỏ qua: import SQL) ├──► queue ◄┤ (clean_*.txt: 55h; urgent: 1h;       │
-   │ hằng đêm: WP-CLI liệt kê archive + phân trang │          │  segment/tag: 12h)                    │
-   └───────────────────────────────────────────────┘          └───────────────────────────────────────┘
-                                                   │
-                                                   ▼
-             ┌──────────────── dott-cache-worker (systemd, chạy liên tục) ────────────────┐
-             │ 1. lấy việc theo thứ tự: purge/new  >  pins đến hạn  >  renew URL cũ nhất │
-             │ 2. refresh:  xóa S3 → xóa disk → trigger desktop + mobile (127.0.0.1)    │
-             │              → kiểm đủ 4 file mới → upload S3 Chicago → đảm bảo có key KV │
-             │    remove:   xóa KV → xóa S3 → xóa disk → đánh dấu removed               │
-             │ 3. ghi kết quả vào urls (một transaction ngắn mỗi URL)                    │
-             │ 4. tự lùi lại khi load cao / RAM thấp / PHP-FPM bận                       │
-             └─────────────────────────────────────────────────────────────────────────────┘
-                                                   │
-                     ┌─────────────────────────────┴──────────────────────────┐
-             reconcile (timer hằng tuần, 3:30 sáng CN)              report (timer hằng ngày)
-             đối chiếu DB ↔ disk ↔ S3 ↔ KV, đưa việc sửa vào queue   tóm tắt + cảnh báo
-```
-
-## 3. Lưu trạng thái: chuyển từ SQLite sang MariaDB
-
-### Vì sao không giữ SQLite
-| Vấn đề | SQLite (hiện tại) | MariaDB (đề xuất) |
+| Việc | VPS chính (45.77.32.177) | VPS phụ `claude-control` |
 |---|---|---|
-| Nhiều tiến trình cùng ghi | Chỉ một writer tại một thời điểm, khóa cả file; transaction dài sẽ chặn các tiến trình khác (`database is locked`) | InnoDB **khóa theo dòng**: worker cập nhật URL A không chặn url_sync thêm URL B |
-| PHP (WordPress) ghi vào hàng đợi | Khó: file thuộc root, PHP-FPM chạy dưới user `diaocthDP4f`, cần thêm extension, rủi ro hỏng file | Dễ: `$wpdb` hoặc kết nối MySQL sẵn có, chỉ cần GRANT INSERT |
-| Truy vấn và báo cáo | Phải SSH vào rồi chạy sqlite3 | phpMyAdmin, `vps.py sql`, đối chiếu thẳng với `thai_posts` |
-| RAM thêm | 0 | Gần như 0 (MariaDB đang chạy sẵn; 60 nghìn dòng chỉ khoảng 20 MB) |
-| Backup | Phải chép file | Đi chung `mysqldump` |
+| Render PHP, WP Rocket ghi 4 file cache | ✅ bắt buộc | — |
+| Phục vụ file cache cho khách (nginx + rocket-nginx) | ✅ | — |
+| Ghi sự kiện thay đổi (mu-plugin) | ✅ 1 câu INSERT | — |
+| Xóa cache trên đĩa | ✅ thực thi (WP Rocket `rocket_clean_files`) | ra lệnh qua REST |
+| Hàng đợi, ưu tiên, retry, renew theo chu kỳ | — | ✅ |
+| Trigger render desktop/mobile | nhận request | ✅ gửi request (có giới hạn) |
+| Lấy HTML đã cache, upload S3 Chicago | phục vụ file tĩnh (rẻ) | ✅ |
+| Ghi/xóa Cloudflare KV | — | ✅ |
+| Database URL và trạng thái | — | ✅ SQLite |
+| Đối soát DB ↔ WordPress ↔ S3 ↔ KV ↔ đĩa | trả danh sách (REST / `ssh main`) | ✅ |
+| Báo cáo Telegram | — | ✅ |
+| Log PHP/nginx: thu thập và phân tích | log nằm ở đây | ✅ đã có (`/root/health`, [mục 10](#10-log-php-và-nginx-đã-có-trên-vps-phụ)) |
 
-→ Tạo database riêng **`dott_cache`** và 2 user:
-- `dott_cache_app`: quyền đầy đủ trên `dott_cache` (dùng cho các service Python).
-- `dott_cache_wp`: **chỉ INSERT** vào `dott_cache.queue` (dùng cho mu-plugin).
+**Tải VPS chính giảm được:**
+- Hết các tiến trình Python cron và screen: mỗi tiến trình khoảng 60–150 MB RAM, đồng thời chặn tận gốc lỗi treo F1.
+- Hết phần mã hóa TLS và AWS SDK khi upload S3, hết các lệnh gọi Cloudflare API.
+- Hết việc ghi SQLite và các file log của tool (ổ đang đầy 87%).
 
-Không đụng tới database WordPress.
+**Không giảm được:** thời gian render PHP. Mỗi URL vẫn mất khoảng 2–4 giây CPU trên 1 nhân của VPS chính. Đây là phần nặng nhất, và chỉ có thể điều tiết (mục 6) chứ không chuyển đi được.
 
-### Schema (phác thảo)
-```sql
-CREATE TABLE urls (
-  id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  path          VARCHAR(500) NOT NULL UNIQUE,     -- key chuẩn hóa giống Worker: '/abc/'
-  blog_id       TINYINT NOT NULL,                 -- 1=vi, 2=en, 3=es
-  page_type     ENUM('home','single','page','archive') NOT NULL,
-  object_type   VARCHAR(32), object_id BIGINT,     -- post/term nguồn (để biết URL sinh ra từ đâu)
-  page_number   SMALLINT NOT NULL DEFAULT 1,
-  status        ENUM('active','removed') NOT NULL DEFAULT 'active',
-  disk_at       DATETIME NULL,                    -- lần cuối tạo cache trên disk thành công
-  s3_at         DATETIME NULL,                    -- lần cuối upload S3 thành công (đủ 4 file)
-  kv_at         DATETIME NULL,                    -- lần cuối xác nhận có key KV
-  fail_count    SMALLINT NOT NULL DEFAULT 0, last_error VARCHAR(255) NULL,
-  updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  KEY k_renew (status, s3_at), KEY k_src (object_type, object_id)
-);
+## 3. Kiến trúc tổng thể
 
-CREATE TABLE queue (                              -- chỉ thêm vào; worker nhận việc rồi xóa dòng
-  id          BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  path        VARCHAR(500) NOT NULL,
-  action      ENUM('refresh','remove') NOT NULL,
-  priority    TINYINT NOT NULL,                   -- 10=purge/publish, 20=archive trang 1, 30=pins, 50=archive trang sâu
-  reason      VARCHAR(64),                        -- 'rocket_clean_post', 'unpublish', 'pin', 'reconcile'...
-  not_before  DATETIME NULL,                      -- gom việc trùng / thời gian chờ khi thử lại
-  claimed_by  VARCHAR(64) NULL, claimed_at DATETIME NULL,
-  created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  KEY k_take (claimed_by, priority, id)
-);
-
-CREATE TABLE pins (path VARCHAR(500) PRIMARY KEY, max_age_min INT NOT NULL, source VARCHAR(64));
-CREATE TABLE state (k VARCHAR(64) PRIMARY KEY, v VARCHAR(255));   -- watermark của url_sync, thống kê
-CREATE TABLE runs (id ..., job VARCHAR(32), started_at, finished_at, ok INT, failed INT, note TEXT);
+```
+ VPS CHÍNH (production)                                   VPS PHỤ claude-control
+ ┌─────────────────────────────────────────┐              ┌──────────────────────────────────────────────────┐
+ │ WordPress (PHP-FPM)                      │              │  dott-cache (Go, systemd, MemoryMax=120M)         │
+ │  mu-plugin dott-cache.php                │              │                                                  │
+ │   • hook publish/unpublish/slug/term/... │   REST/HTTPS │  ┌─ poller ──── GET /changes (30 s) ─────────┐   │
+ │     → INSERT thai_dott_cache_events      │◄─────────────┼──┤             POST /ack                      │   │
+ │   • REST /wp-json/dott-cache/v1/          │  token + IP  │  │                                             ▼   │
+ │      changes, ack, urls, purge, health   │              │  │   SQLite /var/lib/dott-cache/state.db       │   │
+ │                                          │              │  │   urls · queue · pins · runs · state        │   │
+ │ nginx + rocket-nginx                     │   HTTPS      │  │                                             │   │
+ │  file tĩnh wp-rocket/... (Last-Modified) │◄─────────────┼──┤ render-limiter (1–2 slot) ◄── throttle ──┐  │   │
+ │                                          │  origin trực │  │   trigger → fetch gzip desktop + mobile    │  │   │
+ │ Netdata :19999 (/api/v1/data)            │◄─────────────┼──┼───────────────────────────────────────────┘  │   │
+ │                                          │              │  │ uploader (4–8 goroutine) ──► S3 Chicago        │
+ │ sshd :8282 (key claude-control)          │◄─────────────┼──┤ kv-batcher (gom 1–5 phút) ──► Cloudflare KV    │
+ └─────────────────────────────────────────┘  ssh main    │  │ reconcile (timer CN 03:30), report (07:00)     │
+                                                           │  └─ Telegram ◄───────────────────────────────────┘
+                                                           │  /root/health (đã có): log + Claude, 23:45         │
+                                                           └──────────────────────────────────────────────────┘
 ```
 
-### Cập nhật DB mà không khóa hay ảnh hưởng tiến trình đang chạy
-1. **Transaction ngắn, không gọi mạng bên trong transaction.** Worker nhận việc (1 câu UPDATE, commit), rồi làm curl/S3/KV **ngoài transaction**, rồi ghi kết quả (1 câu UPDATE, commit). Không giữ khóa trong lúc chờ PHP dựng trang.
-2. **Nhận việc nguyên tử, không cần `SKIP LOCKED`** (MariaDB 10.5 chưa hỗ trợ):
-   ```sql
-   UPDATE queue SET claimed_by=%(me)s, claimed_at=NOW()
-    WHERE claimed_by IS NULL AND (not_before IS NULL OR not_before<=NOW())
-    ORDER BY priority, id LIMIT 10;
-   SELECT * FROM queue WHERE claimed_by=%(me)s;
-   ```
-   Hai worker không bao giờ nhận trùng việc. Việc bị nhận quá 15 phút (worker chết giữa chừng) được nhả lại tự động.
-3. **Gom việc trùng**: nếu một URL đã có trong hàng đợi chưa được nhận thì không thêm nữa (mu-plugin dùng `INSERT ... SELECT ... WHERE NOT EXISTS`, worker lọc lại lần nữa). Sửa một bài 5 lần trong 1 phút chỉ tạo cache 1 lần.
-4. **Các job khác không ghi chéo cột của nhau**: url_sync chỉ INSERT URL mới và thêm việc vào queue; worker là nơi **duy nhất** ghi `disk_at/s3_at/kv_at/status`; reconcile chỉ đọc rồi thêm việc vào queue, không sửa trực tiếp. Nhờ vậy không có hai tiến trình tranh nhau cùng một dòng.
-5. **Ghi hàng loạt theo lô nhỏ** (url_sync, reconcile): tối đa 500 dòng mỗi transaction, `innodb_lock_wait_timeout` ngắn, lỗi deadlock thì thử lại.
-6. **Đổi schema không cần dừng hệ thống**: các migration chỉ thêm cột hoặc index, chạy từ thư mục `migrations/` có đánh số.
-7. **Chuyển dữ liệu từ SQLite một lần** (`tools/migrate_sqlite_to_mariadb.py`): chụp `.backup` SQLite, import vào `dott_cache.urls`, suy ra `blog_id/page_type` (sửa F3 theo dữ liệu WordPress), đối chiếu số lượng với KV (60.687).
+## 4. Đường giao tiếp giữa 2 máy
 
-## 4. Lấy URL mới và tự cập nhật vào DB + KV
+Đã kiểm tra thật từ VPS phụ ngày 27/11 (chỉ đọc):
 
-### 4.1. Hướng sự kiện: mu-plugin `dott-cache-queue.php` (gần như tức thì)
-| Hook | Khi nào | Việc đưa vào queue |
-|---|---|---|
-| `transition_post_status` → `publish` | Đăng bài mới, hoặc bài hẹn giờ (future) đến giờ đăng | `refresh` URL bài (ưu tiên 10) |
-| `transition_post_status` từ `publish` sang trạng thái khác | Chuyển nháp, private, trash | `remove` URL bài (ưu tiên 10) |
-| `post_updated` khi slug hoặc parent đổi | Đổi URL | `remove` URL cũ, `refresh` URL mới |
-| `after_rocket_clean_post($post, $purge_urls, $lang)` | WP Rocket xóa cache khi sửa bài hoặc duyệt comment | `refresh` mọi URL trong `$purge_urls` (bài + trang chủ + archive liên quan), ưu tiên 10/20 |
-| `after_rocket_clean_files($urls)` | Xóa cache theo URL (thủ công, plugin khác) | `refresh` các URL đó |
-| `after_rocket_clean_domain` | Bấm "Clear all cache" | **Không** đưa 60 nghìn URL vào queue; chỉ ghi cờ `state.full_purge_at`, worker hiểu "tăng tốc renew", report gửi cảnh báo |
-| `delete_term` / `edited_term` (slug đổi) | Đổi hoặc xóa chuyên mục, tag | `remove` hoặc `refresh` các URL archive |
+| Đường | Dùng cho | Đã kiểm tra | Lưu ý |
+|---|---|---|---|
+| **HTTPS origin** `--resolve diaocthongthai.com:443:45.77.32.177` (không qua Cloudflare) | Trigger render, lấy HTML đã cache | ✅ Một file cache được phục vụ trong **khoảng 9 ms**. Bản desktop và mobile khác nhau theo UA. Có header `Last-Modified` = mtime file cache; khi gửi `Accept-Encoding: gzip` thì nhận nguyên file `_gzip` | Chứng chỉ là **Cloudflare Origin CA**, nên Go phải nạp CA gốc của Cloudflare Origin (tải 1 lần, để trong repo), **không dùng InsecureSkipVerify** |
+| **REST mu-plugin** `/wp-json/dott-cache/v1/*` (cũng gọi thẳng origin) | Lấy sự kiện, danh sách URL, yêu cầu xóa cache đĩa | Chưa có, cần viết | Xác thực bằng header `Authorization: Bearer <token>` **và** chỉ chấp nhận IP `139.180.158.221` (kiểm tra `REMOTE_ADDR` trong PHP; nginx chưa bật `real_ip`, nên request thẳng tới origin có đúng IP thật) |
+| **Netdata API** `http://45.77.32.177:19999/api/v1/data?chart=system.cpu...` | Đo CPU/RAM VPS chính để tạm dừng | ✅ khoảng 30 ms | Khi khóa Netdata (TODO_VPS) thì nhớ **mở riêng cho IP VPS phụ** |
+| **`ssh main`** (key `id_main_vps`) | Dự phòng đo tải; đọc danh sách file trên đĩa khi đối soát; thao tác khẩn | ✅ khoảng 0,6 s/lần | Key có `no-port-forwarding`, nên **không mở được SSH tunnel tới MariaDB** (khác checklist mục 4 trong skill `vps-claude-control`). Vì vậy v2 dùng REST, không đọc DB WordPress trực tiếp |
 
-- Mọi URL được chuẩn hóa thành path **trong PHP bằng đúng quy tắc của Worker** (lowercase, `/` cuối).
-- Lỗi trong mu-plugin (ví dụ DB `dott_cache` không kết nối được) **được bỏ qua và ghi `error_log`**, không bao giờ làm hỏng thao tác của biên tập viên.
-- Thay thế hook comment trong `ct-site-enhancer` (F12); xóa đoạn đó khi mu-plugin đã chạy ổn.
+Giới hạn trên VPS chính cần biết:
+- nginx `location /`: `limit_req zone=one` **10 request/giây, burst 20**, `limit_conn` **10 kết nối/IP**. Khi vượt ngưỡng nginx trả **403**. Cache system dùng tối đa khoảng 6 kết nối cùng lúc (1–2 render + vài fetch file tĩnh), nên nằm dưới ngưỡng. Code phải coi 403 là tín hiệu "chậm lại", không coi là lỗi URL.
+- fail2ban `nginx-404` chỉ đọc log của congtoan.net (cổng 80, ngưỡng 20 lần/5 phút), nên hiện tại không ảnh hưởng. Vẫn nên thêm `ignoreip = 139.180.158.221` cho các jail nginx để phòng sau này (**cần chủ site đồng ý**).
 
-### 4.2. Quét định kỳ: `url_sync` (systemd timer mỗi 15 phút, lưới an toàn)
-- Đọc `thai_posts` (vi) và `thai_2_posts` (en) có `post_modified_gmt > watermark` **hoặc** đăng/hẹn giờ trong khoảng đó, so với `urls` để bắt những thay đổi không đi qua hook (import SQL, sửa thẳng DB). Truy vấn chỉ đọc theo index, chạy trong vài trăm ms.
-- Permalink lấy bằng `wp post list --post__in=... --field=url` (WP-CLI, theo lô) để đúng 100% với cấu trúc permalink thật, không tự ghép chuỗi.
-- **Hằng đêm 2:00**: liệt kê đầy đủ bằng WP-CLI (logic của `wp_cli_extract_all_urls.py` chuyển lên server): trang chủ, page, archive và **toàn bộ phân trang**. Đối chiếu với `urls`: URL mới thì `refresh`, URL không còn thì `remove`. Bắt được các trang phân trang mới sinh khi có thêm bài.
-- **Không ghi KV ở bước này.** KV được ghi bởi worker **sau khi upload S3 thành công**, để Worker Cloudflare không trỏ tới file chưa có.
+## 5. Upload HTML lên S3 khi file cache nằm trên VPS chính
 
-### 4.3. Thứ tự ghi KV / S3 (quy tắc bất biến)
-- **Thêm hoặc làm mới:** xóa S3 cũ (nếu có), để khách Mỹ tạm về origin và nhận bản mới thay vì bản cũ; tạo cache; upload S3; rồi `PUT` key KV (nếu chưa có).
-- **Gỡ:** `DELETE` key KV trước, rồi xóa S3, rồi xóa disk, rồi đánh dấu `removed`.
-- KV ghi theo lô qua **Cloudflare API** (`requests`, token trong `secrets.json`): gom tối đa 10.000 key/request, mỗi 1–5 phút một lần. Sau khi ghi, kiểm tra bằng list và thử lại (F17).
+Đây là điểm khó nhất khi chuyển sang VPS phụ: WP Rocket ghi 4 file trên đĩa VPS chính, còn S3 cần đúng 4 file đó (`index-https.html`, `index-https.html_gzip`, `index-mobile-https.html`, `index-mobile-https.html_gzip`).
 
-## 5. Các thành phần và lịch chạy
+### Các phương án
 
-| Thành phần | Loại | Lịch | RAM dự kiến | Thay cho |
-|---|---|---|---|---|
-| `dott-cache-worker` | systemd service, `Restart=always` | liên tục | khoảng 60 MB | `cache_renew` (screen F1), `m4`, `cache_create`, `cache-urls-update`, 2 cron cũ |
-| `dott-cache-sync` | systemd timer | 15 phút (nhanh) + 02:00 (đầy đủ) | khoảng 40 MB, vài giây | A1, u1, u2, KV_export/import |
-| `dott-cache-reconcile` | systemd timer | Chủ nhật 03:30 | khoảng 100 MB, khoảng 10 phút | m0, m1, m2, m3, cache_clean |
-| `dott-cache-report` | systemd timer | 07:00 hằng ngày | nhỏ | — (mới) |
-| mu-plugin `dott-cache-queue.php` | PHP | theo sự kiện | 0 | hook comment trong site-enhancer |
-| CLI `dott-cache` | lệnh tay | khi cần | — | `cache-segment-update` (`dott-cache enqueue --archive <url> --with-posts`) |
+| | A. Lấy qua HTTP từ origin (**đề xuất**) | B. Lấy file qua `ssh main` | C. Giữ một agent upload nhỏ trên VPS chính |
+|---|---|---|---|
+| Cách làm | Sau khi trigger, GET lại URL với `Accept-Encoding: gzip` (desktop UA và iPhone UA). nginx trả nguyên file `_gzip`. Giải nén trong RAM để có file `.html` | `ssh main "cat file1 file2 ..."` hoặc `tar` theo lô, nhận về VPS phụ rồi upload | VPS phụ ra lệnh, agent trên VPS chính tự upload S3 như bây giờ |
+| Tải VPS chính | Rất thấp: nginx phục vụ file tĩnh (khoảng 9 ms), chỉ khoảng 2 × 20 KB mỗi URL | Thấp–vừa: mỗi lô tốn một phiên SSH (mã hóa, fork process) | Như hiện tại: TLS tới S3 + SDK + RAM |
+| Chính xác | `_gzip` giống từng byte với file trên đĩa. `.html` = giải nén của `_gzip`, cũng là cách WP Rocket tạo ra 2 file này | Giống từng byte | Giống từng byte |
+| Cần quyền gì | Không cần gì thêm | Đọc file bằng root qua SSH | Secret S3 vẫn nằm trên VPS chính |
+| Băng thông | Khoảng 40 KB/URL, 60 nghìn URL khoảng 2,5 GB mỗi vòng renew (Vultr có 2 TB/tháng) | Tương tự | Không đổi |
 
-- **systemd timer thay cho cron**: một job đang chạy thì lần sau không khởi động chồng lên (chặn tận gốc kiểu lỗi F1); log vào journald (`journalctl -u dott-cache-*`); có `TimeoutStartSec` để giết job treo.
-- Hạn mức (ví dụ cho worker): `MemoryMax=200M`, `CPUQuota=60%`, `Nice=10`, `IOSchedulingClass=idle`. Nếu vượt hạn thì chỉ worker bị giết rồi tự khởi động lại; MariaDB và PHP không bị ảnh hưởng.
+**Chọn A:**
+- Rẻ nhất cho VPS chính, không cần thêm quyền.
+- Dùng cùng một kết nối HTTP với bước trigger.
 
-### Worker tự điều tiết
-- Tốc độ mặc định: khoảng 2–3 giây mỗi URL (mỗi URL gồm 2 lần dựng PHP: desktop và mobile).
-- **Tạm dừng** khi: load average 1 phút > 1.5, `MemAvailable` < 250 MB, hoặc PHP-FPM có quá N tiến trình đang bận. Giờ cao điểm (theo GA4) thì giảm tốc độ renew, nhưng việc ưu tiên 10 (sửa bài) vẫn làm ngay.
-- **Renew nền**: khi hàng đợi trống thì lấy URL có `s3_at` cũ nhất. Mục tiêu vòng renew được chỉnh bằng config (hiện khoảng 90 ngày; nếu cần nhanh hơn thì tăng tốc vào ban đêm).
+**Dùng B ở đâu:**
+- Trong reconcile, để kiểm tra trên đĩa có đủ file hay không (danh sách file + mtime).
+- Dự phòng khi A gặp lỗi bất thường.
 
-## 6. Luồng xử lý chi tiết của worker (một URL)
-
+### Luồng chi tiết của phương án A (một URL)
 ```
 refresh(path):
-  1. s3.delete(4 file)               # khách Mỹ về origin trong lúc tạo lại (không thấy bản cũ)
-  2. disk.delete(4 file)             # WP Rocket có thể đã xóa trước đó; xóa lại không sao
-  3. trigger(desktop UA), trigger(iPhone UA)   # curl https://127.0.0.1<path> -H Host, timeout 30s
-  4. verify: đủ 4 file, mtime >= lúc bắt đầu, kích thước > 2 KB, có </html>
-       └─ lỗi → fail_count++, đưa lại vào queue với not_before = now + 2^n phút (tối đa 6h); lỗi quá 5 lần → report
-  5. s3.upload(4 file, ACL public-read, gzip header)  → kiểm ok từng file (F13)
-  6. kv.ensure(path)                 # gom lô, ghi theo chu kỳ
-  7. UPDATE urls SET disk_at=s3_at=NOW(), fail_count=0 WHERE path=...
-remove(path):  kv.delete → s3.delete → disk.delete → UPDATE status='removed'
+  t0 = now
+  1. purge:   POST /dott-cache/v1/purge {paths:[path]}   # VPS chính gọi rocket_clean_files(), xóa 4 file
+  2. trigger: GET origin path, UA desktop   ─┐ đi qua render-limiter (1–2 slot), timeout 60 s
+              GET origin path, UA iPhone    ─┘ đo thời gian render → đưa vào throttle (mục 6)
+  3. fetch:   GET lại 2 lần với Accept-Encoding: gzip
+              phải thỏa: 200, Content-Encoding: gzip, Last-Modified >= t0 - 2 s (đúng file mới tạo),
+                         giải nén được, có </html>, có comment "Debug: cached@<ts>" với ts >= t0,
+                         > 2 KB, bản mobile khác bản desktop
+              └─ không thỏa → trigger lại 1 lần → vẫn lỗi: fail_count++, đưa lại queue với backoff
+  4. upload:  4 object lên S3 Chicago, chạy song song (uploader pool), đúng Content-Type / Content-Encoding
+              như tool cũ; kiểm tra ETag = MD5 từng file (F13)
+  5. kv:      đưa path vào kv-batcher (PUT nếu chưa có)
+  6. ghi SQLite: disk_at = s3_at = now, fail_count = 0
+remove(path): KV delete → S3 delete 4 file → POST purge → status = 'removed'
 ```
-Nếu bước 3–5 lỗi sau khi đã xóa S3 ở bước 1, Worker Cloudflare thấy S3 trả 404 và tự về origin, nên khách vẫn xem được trang (chậm hơn, nhưng không bao giờ thấy lỗi).
 
-## 7. Reconcile hằng tuần (lưới an toàn cuối)
-1. **DB và WordPress**: chạy liệt kê đầy đủ, thêm hoặc gỡ (giống sync hằng đêm).
-2. **DB và disk**: URL `active` thiếu bất kỳ file nào trong 4 file thì `refresh` (thay m1/m4; sửa luôn trường hợp thiếu một nửa của F6).
-3. **DB và S3**: list `_cache_html/` theo trang (khoảng 250 request, xử lý dần, không nạp hết vào RAM). URL thiếu file thì `refresh`. File trên S3 không thuộc URL `active` nào thì xóa (thay `cache_clean`; F7 cũng tự được dọn).
-4. **DB và KV**: list toàn bộ KV (khoảng 61 request). Thiếu thì PUT, thừa thì DELETE, rồi list lại.
-5. **Chặn an toàn**: nếu số thay đổi vượt ngưỡng (ví dụ > 2% tổng số URL) thì **không tự sửa**, chỉ báo cáo để người xem trước. Tránh xóa hàng loạt khi có lỗi logic hoặc API trả dữ liệu thiếu.
+**Vì sao không xóa S3 trước như v1:**
+- Ở v1, bước "xóa S3 trước" giúp khách Mỹ tạm về origin trong lúc tạo lại cache.
+- Ở v2, khoảng thời gian từ purge tới upload chỉ vài giây. Bản cũ trên S3 vẫn đúng trang, chỉ cũ hơn, nên **ghi đè luôn** là an toàn và đỡ được một lượt gọi S3.
+- Riêng khi đổi slug hoặc gỡ bài thì vẫn xóa ngay (luồng `remove`).
 
-## 8. Cấu trúc repo mới (thay toàn bộ `server/`, `pc/`, `tools/` cũ)
+**Phải kiểm tra ở giai đoạn 1, trước khi chạy thật:**
+1. So `md5` của file lấy qua HTTP với file trên đĩa (qua `ssh main md5sum`) cho khoảng 50 URL (desktop/mobile, vi/en, trang chủ/bài/archive/phân trang).
+2. Xác nhận response đầu tiên do PHP render (khi chưa có cache) **không bao giờ** được dùng để upload. Bước 3 luôn GET lại và đòi `Last-Modified`, vì header này chỉ có khi nginx phục vụ file tĩnh.
+3. Content-Type và Content-Encoding trên S3 phải giống hệt bản tool cũ đang upload, để Worker `thongthai-cache-v7.js` không bị ảnh hưởng.
+
+## 6. Tự điều tiết theo tải VPS chính
+
+Hàm cũ `check_cpu_usage_and_wait()` ([server/utils.py](../server/utils.py)) dùng `psutil.cpu_percent()`. Hàm này đo CPU của **chính máy chạy tool**, nên chạy trên VPS phụ thì sẽ đo sai máy. Bản Go thay bằng goroutine `throttle`, cứ 5–10 giây đọc một lần và bật/tắt cờ cho render-limiter:
+
+| Tín hiệu | Nguồn | Ngưỡng mặc định |
+|---|---|---|
+| CPU busy (100 − idle, trung bình 10 s) | Netdata `system.cpu` | > 70% thì tạm dừng, < 55% thì chạy lại (có khoảng đệm để không bật/tắt liên tục) |
+| RAM còn trống, swap | Netdata `mem.available`, `mem.swap` | `MemAvailable` < 250 MB thì tạm dừng |
+| Thời gian render của chính request trigger | đo trực tiếp | Trung vị 20 request gần nhất > 3 lần mức bình thường, hoặc > 10 s, thì giảm còn 1 slot rồi tạm dừng |
+| HTTP 403/429/5xx từ origin | đo trực tiếp | Lùi dần 30 s → 10 phút |
+| Dự phòng khi Netdata không trả lời | `ssh main cat /proc/loadavg` mỗi 60 s | load 1 phút > 1,5 (máy 1 nhân) thì tạm dừng. Cả hai nguồn đều lỗi thì **tạm dừng để an toàn** |
+
+- **Việc ưu tiên 10** (bài vừa sửa hoặc vừa đăng) được làm ngay cả khi tải ở mức vừa. Chỉ dừng khi tải ở mức "đỏ".
+- **Renew nền** chỉ chạy khi tải thấp. Có cấu hình khung giờ chạy nhanh hơn vào ban đêm.
+
+## 7. Lấy URL mới và tự cập nhật
+
+### 7.1. Sự kiện trên VPS chính: mu-plugin `dott-cache.php`
+Dùng bảng `thai_dott_cache_events` trong **database WordPress hiện có** (prefix của site chính), nên không cần tạo DB hay user MySQL mới:
+```sql
+CREATE TABLE thai_dott_cache_events (
+  id         BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  blog_id    TINYINT NOT NULL,
+  path       VARCHAR(500) NOT NULL,          -- đã chuẩn hóa theo quy tắc của Worker
+  action     ENUM('refresh','remove') NOT NULL,
+  priority   TINYINT NOT NULL,               -- 10 sửa/đăng bài, 20 archive trang 1, 50 archive sâu
+  reason     VARCHAR(64),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+| Hook | Việc ghi vào bảng sự kiện |
+|---|---|
+| `transition_post_status` → `publish` (gồm bài hẹn giờ đến giờ đăng) | `refresh` bài, trang chủ, archive trang 1 của chuyên mục và tag |
+| `transition_post_status` từ `publish` sang trạng thái khác | `remove` URL bài, `refresh` archive liên quan |
+| `post_updated` khi bài đang `publish` | `refresh` URL bài (**cần vì `wp-rocket-no-cache-auto-purge` đang bật**, WP Rocket không tự purge khi sửa bài; xem F11) |
+| `post_updated` khi slug hoặc parent đổi | `remove` URL cũ, `refresh` URL mới |
+| `after_rocket_clean_post`, `after_rocket_clean_files` | `refresh` các URL WP Rocket đã xóa (thủ công hoặc plugin khác). **Bỏ qua khi lệnh xóa đến từ chính endpoint `purge`**, để không tạo vòng lặp |
+| `after_rocket_clean_domain` ("Clear all cache") | Chỉ ghi một sự kiện đặc biệt `full_purge`. Mặc định: **không xóa S3**, worker tăng tốc renew và gửi Telegram |
+| `comment_post`, `wp_set_comment_status` → approved | `refresh` URL bài (thay hook trong `ct-site-enhancer`, F12) |
+| `edited_term`, `delete_term` | `refresh` hoặc `remove` archive |
+
+Lỗi trong mu-plugin chỉ ghi `error_log`, **không bao giờ làm hỏng thao tác của biên tập viên**.
+
+### 7.2. REST endpoint (trong cùng mu-plugin)
+| Endpoint | Việc làm |
+|---|---|
+| `GET /changes?after_id=N&limit=500` | Trả sự kiện mới |
+| `POST /ack {up_to_id}` | Xóa sự kiện VPS phụ đã nhận (giữ thêm 7 ngày để soát lỗi rồi mới xóa) |
+| `GET /urls?blog=1&type=post&modified_after=...&page=N` | Danh sách permalink thật, dùng `get_permalink()`/`get_term_link()` (không tự ghép chuỗi). Gồm cả phân trang của archive (dựa trên số bài và `posts_per_page`) |
+| `POST /purge {paths:[...]}` | Gọi `rocket_clean_files()` cho tối đa 100 URL, đặt cờ "nguồn = dott-cache" để hook ở trên bỏ qua |
+| `GET /health` | Phiên bản plugin, số sự kiện đang chờ, `MemAvailable` (dự phòng cho throttle) |
+
+Bảo mật:
+- Token dài (để trong `wp-config.php` dưới dạng hằng `DOTT_CACHE_TOKEN`, và trong `/etc/dott-cache/env` trên VPS phụ).
+- Chỉ chấp nhận IP `139.180.158.221`; khi gọi qua Cloudflare thì trả 404.
+- Không có endpoint nào trả nội dung nhạy cảm.
+
+### 7.3. Quét định kỳ (lưới an toàn)
+- **Mỗi 15 phút:** `GET /urls?modified_after=watermark` để bắt thay đổi không đi qua hook (import SQL, sửa thẳng DB).
+- **Hằng đêm 02:00:** lấy danh sách đầy đủ theo trang (khoảng 60 nghìn URL, 500 URL mỗi request, có nghỉ giữa các trang). Đối chiếu với SQLite: URL mới thì `refresh`, URL không còn thì `remove` (có chặn ngưỡng, mục 9).
+- Thay thế: A1, u1, u2, `wp_cli_extract_all_urls.py`, KV_export/import.
+
+## 8. Trạng thái trên VPS phụ (SQLite)
+
+- Lý do v1 chọn MariaDB là có nhiều tiến trình cùng ghi, và PHP cần ghi vào hàng đợi. Ở v2 cả hai lý do đều không còn: **chỉ một tiến trình Go ghi** (các goroutine gửi kết quả qua channel cho một writer duy nhất), còn PHP ghi vào bảng sự kiện trên VPS chính.
+- Dùng `modernc.org/sqlite` (Go thuần, không cần cgo), chế độ WAL. Lệnh đọc (`dott-cache status`, báo cáo) chạy song song không bị chặn.
+- Schema giữ như v1: bảng `urls` (path, blog_id, page_type, object, page_number, status, disk_at, s3_at, kv_at, fail_count, last_error), `queue`, `pins`, `state`, `runs`. Bỏ `claimed_by/claimed_at` vì không còn nhiều worker tranh việc.
+- **Chuyển dữ liệu một lần:** lấy `cache_urls.db` trên VPS chính (bản `.backup`), import vào SQLite mới, suy ra `blog_id/page_type` (sửa F3), đối chiếu số lượng với KV (60.687).
+- **Backup:** mỗi đêm `VACUUM INTO` một bản rồi upload lên S3 (prefix `_backup/dott-cache/`), giữ 14 bản. Nếu mất VPS phụ thì dựng lại từ bản này, hoặc chạy lại "quét đầy đủ" + reconcile.
+
+## 9. Đối soát (reconcile) S3 ↔ KV ↔ URL thật
+
+Chạy hằng tuần, Chủ nhật 03:30, ở chế độ chỉ báo cáo trong 2 tuần đầu. Phần lớn chạy trên VPS phụ, không tốn tải VPS chính:
+
+| Bước | Nguồn | Tải VPS chính | Phát hiện → hành động |
+|---|---|---|---|
+| 1. URL thật ↔ SQLite | REST `/urls` (quét đầy đủ) | Thấp (PHP truy vấn, theo trang) | URL mới thì `refresh`; URL đã mất thì `remove` |
+| 2. SQLite ↔ S3 | `ListObjectsV2` `_cache_html/` theo trang (khoảng 250 request), xử lý dạng stream | 0 | Thiếu bất kỳ file nào trong 4 file thì `refresh`; file thừa (không thuộc URL `active`) thì xóa (F7); ETag lạ hoặc file < 2 KB thì `refresh` |
+| 3. SQLite ↔ KV | List KV (khoảng 61 request) | 0 | Thiếu thì PUT, thừa thì DELETE, rồi **list lại để kiểm tra** (F17: bulk delete có thể sót key) |
+| 4. SQLite ↔ đĩa VPS chính | `ssh main` chạy `find .../wp-rocket -name 'index*' -printf '%P %T@\n'` dưới `ionice -c3 nice -n19`, stream về | Vừa (đọc thư mục 14 GB, chạy 1 lần/tuần lúc 03:30) | URL `active` thiếu file thì `refresh`; thư mục cache không thuộc URL nào thì chỉ báo cáo |
+| 5. Kiểm tra ngẫu nhiên | Lấy 200 URL bất kỳ, so `md5` bản trên S3 với bản origin đang phục vụ | Rất thấp | Lệch thì `refresh` và đếm vào báo cáo |
+
+**Chặn an toàn:** nếu số thay đổi vượt ngưỡng (mặc định > 2% tổng URL, hoặc > 500 lệnh xóa) thì **không tự sửa**. Chỉ gửi Telegram kèm file danh sách để chủ site xem trước. Cách này tránh xóa hàng loạt khi có lỗi logic hoặc API trả thiếu dữ liệu.
+
+## 10. Log PHP và nginx (đã có trên VPS phụ)
+
+Hiện đã chạy (chi tiết: `/root/work/2026-11-27_vps-log-va-giam-sat.md` trên VPS phụ):
+- Cron `45 23 * * * /root/health/run.sh` trên VPS phụ.
+- `collect-remote.sh` thu thập số liệu chỉ đọc qua `ssh main`, rồi `claude -p` phân tích theo `prompt.md`. Chỉ nhắn Telegram khi bất thường; Chủ nhật gửi bản tin "vẫn ổn".
+- Trên VPS chính, logrotate riêng chạy lúc 0h05 (giữ 14 ngày, nén). Đã bỏ `log_process_daily.py` khỏi cron (cron này từng restart nginx/PHP mỗi đêm).
+
+Cache system **không làm lại** phần này. Có 3 chỗ nối:
+1. `dott-cache report` (07:00) dùng **cùng bot Telegram** (đọc chung `telegram.env`, hoặc file env riêng có cùng token), với tiêu đề riêng `[cache]` để dễ lọc.
+2. `collect-remote.sh` có thể thêm một dòng `dott-cache status --json` để Claude thấy luôn tình trạng cache trong bản phân tích 23:45 (hàng đợi tồn, lỗi S3/KV, URL lỗi nhiều lần).
+3. (Tùy chọn, sau này) Một module Go nhẹ chạy **gần thời gian thực**: mỗi 5 phút đọc phần mới của `php-error.log`/`error.log` (qua `ssh main tail -c +offset`) và chỉ cảnh báo ngay khi có **PHP Fatal** hoặc 5xx tăng đột biến. Phần phân tích sâu vẫn để Claude làm lúc 23:45. Cần chủ site quyết định có muốn hay không.
+
+## 11. Thành phần Go và lịch chạy (VPS phụ)
+
+Một binary `dott-cache` với nhiều lệnh con:
+
+| Lệnh / unit | Loại | Lịch | RAM dự kiến | Thay cho |
+|---|---|---|---|---|
+| `dott-cache run` (`dott-cache.service`) | service, `Restart=always` | liên tục: poller 30 s, worker, uploader, kv-batcher, throttle | 20–60 MB (`MemoryHigh=80M`, `MemoryMax=120M`) | screen F1 `cache_renew`, `m4`, `cache_create`, `cache-urls-update`, 2 cron cũ (F2), `tmp_update_en_map_of.py` |
+| `dott-cache sync --full` | timer | 02:00 | < 40 MB | A1, u1, u2, KV_export/import |
+| `dott-cache reconcile` | timer | CN 03:30 | < 80 MB (stream, không nạp hết vào RAM) | m0–m3, `cache_clean` |
+| `dott-cache report` | timer | 07:00 | nhỏ | (mới) |
+| `dott-cache status` / `enqueue` / `pin` / `pause` / `resume` | lệnh tay | khi cần | — | `cache-segment-update` (`dott-cache enqueue --archive <url> --with-posts`) |
+| mu-plugin `dott-cache.php` | PHP trên VPS chính | theo sự kiện | 0 | hook comment trong `ct-site-enhancer` |
+
+**Lợi ích Go áp dụng cụ thể:**
+- **RAM thấp, một file chạy:** build trên PC (`$env:GOOS="linux"; $env:GOARCH="amd64"; go build`), chép lên `/opt/dott-cache/bin/`. VPS phụ không cần cài Go, không có venv, không có lỗi wheel của Python 3.14.
+- **Goroutine với giới hạn riêng cho từng loại việc:**
+  - render-limiter **1–2** (tài nguyên quý nhất: CPU VPS chính)
+  - fetch file tĩnh **2–4**
+  - upload S3 **4–8** (băng thông VPS phụ → Chicago)
+  - KV gom lô, 1 request mỗi 1–5 phút
+
+  Nhờ vậy S3/KV chạy nhanh mà không làm tăng tải VPS chính. `context` + timeout cho mọi request mạng, nên không còn tiến trình treo như F1.
+- **Tắt an toàn:** nhận SIGTERM thì ngừng nhận việc mới, làm xong URL đang dở, ghi SQLite rồi thoát. `systemctl restart` không làm mất việc.
+- Thư viện dự kiến: `aws-sdk-go-v2` (endpoint Linode `us-ord-1`), `modernc.org/sqlite`, `net/http` chuẩn (Cloudflare API, REST, Netdata, Telegram), `golang.org/x/crypto/ssh` hoặc gọi `ssh` của hệ thống cho `ssh main`.
+
+Unit systemd theo mẫu của skill `vps-claude-control` (`references/deploy-service.md`):
+- User riêng `dott-cache`, `ProtectSystem=strict`, `ReadWritePaths=/var/lib/dott-cache`.
+- Secret trong `/etc/dott-cache/env` (chmod 600).
+- `CPUQuota=50%`, `Nice=10`.
+- Riêng `ssh main` cần đọc key `/root/.ssh/id_main_vps`. Phương án: tạo **key thứ hai riêng cho dott-cache** trên VPS chính với `command=` giới hạn đúng 2 lệnh (`find` đối soát, `cat /proc/loadavg`), không dùng chung key của Claude (**cần chủ site đồng ý**).
+
+## 12. Bí mật và bảo mật
+
+| Bí mật | Nằm ở | Ghi chú |
+|---|---|---|
+| S3 Linode key | `/etc/dott-cache/env` (VPS phụ) | Nên tạo **key mới chỉ có quyền trên bucket `cdn.diaocthongthai.com`** thay vì copy key hiện tại. Thu hồi key cũ trên VPS chính sau khi chuyển xong |
+| Cloudflare token | như trên | Token riêng, chỉ có quyền **Workers KV Storage:Edit** trên account (F16); không dùng chung token đã dán trong chat |
+| `DOTT_CACHE_TOKEN` (REST) | `wp-config.php` + env VPS phụ | Sinh ngẫu nhiên 48 ký tự |
+| Telegram bot | dùng chung với `/root/health` | |
+
+- Claude trên VPS phụ đang bị cấm đọc `/root/.ssh/id_*`. Thêm `/etc/dott-cache/**` vào danh sách cấm trong `/root/.claude/settings.json`; **cần chủ site đồng ý** vì đây là thay đổi quyền.
+- Service Go **không mở cổng nào ra ngoài**: chỉ gọi đi, không lắng nghe; endpoint `/health` nếu có thì chỉ bind `127.0.0.1`. UFW VPS phụ giữ như hiện tại (chỉ 22/tcp).
+
+## 13. Cấu trúc repo mới
 
 ```
 dott-cache-management/
-├── dott_cache/               # package Python 3.8+, chỉ cần requests, boto3, pymysql, psutil
-│   ├── config.py             # đọc /etc/dott-cache/config.json + secrets.json (chmod 600)
-│   ├── paths.py              # normalize_path (giống Worker), path → 4 file disk / 4 key S3
-│   ├── db.py                 # MariaDB: claim/ack queue, cập nhật urls, retry deadlock
-│   ├── wp.py                 # đọc thai_posts/thai_2_posts, gọi WP-CLI liệt kê URL
-│   ├── cache.py              # trigger + verify trên disk
-│   ├── s3.py                 # upload/delete/list (nhiều bucket theo config, F9)
-│   ├── kv.py                 # Cloudflare API: bulk put/delete + kiểm tra + thử lại (F17)
-│   ├── throttle.py           # load/RAM/PHP-FPM → tạm dừng hoặc tiếp tục
-│   └── cli.py                # dott-cache worker|sync|reconcile|report|status|enqueue|pin
-├── wp/mu-plugins/dott-cache-queue.php
-├── migrations/001_init.sql
+├── cmd/dott-cache/main.go          # lệnh con: run | sync | reconcile | report | status | enqueue | pin | pause | resume
+├── internal/
+│   ├── config/                     # đọc /etc/dott-cache/config.json + env
+│   ├── paths/                      # normalize (giống Worker + kv_key() của u2 v3.4), path → 4 key S3
+│   ├── store/                      # SQLite: schema, migration, writer duy nhất
+│   ├── origin/                     # HTTP tới origin: CA Cloudflare Origin, trigger, fetch + verify
+│   ├── wpapi/                      # REST mu-plugin: changes, ack, urls, purge
+│   ├── s3/                         # upload/delete/list theo lô, kiểm tra ETag
+│   ├── kv/                         # Cloudflare bulk put/delete + list kiểm tra + thử lại (F17)
+│   ├── throttle/                   # Netdata + thời gian render + ssh dự phòng
+│   ├── reconcile/
+│   └── notify/                     # Telegram
+├── wp/mu-plugins/dott-cache.php    # hook sự kiện + REST endpoint
 ├── deploy/systemd/*.service, *.timer, deploy/install.sh
-├── tools/                    # script chạy một lần: migrate_sqlite_to_mariadb.py, fix_f4_kv_keys.py...
-├── tests/                    # test cho normalize_path, quy trình claim queue, kv diff...
+├── certs/cloudflare-origin-ca.pem
+├── tools/                          # chạy một lần: import cache_urls.db, so md5 HTTP ↔ đĩa
+├── legacy/                         # server/, pc/, tools/ Python cũ (giữ tới khi bỏ hẳn)
 └── docs/
 ```
-Triển khai: `git pull` (deploy key chỉ đọc) vào `/opt/dott-cache`, rồi `deploy/install.sh` (cài unit, chạy migration). Toàn bộ code cũ và các file 1_/2_/3_ trên VPS được dọn (F8).
+- Code mới phát triển ở `D:\Claude\2026-11-26 Cache System NEW - Server only`, cùng repo GitHub `congtoan/dott-cache-management`, theo nhánh `v2`.
+- Gắn tag `v0-legacy` trước khi dời code cũ vào `legacy/`.
 
-## 9. Lộ trình triển khai
+## 14. Lộ trình triển khai
 
-| Giai đoạn | Nội dung | Rủi ro | Cách quay lại |
+| Giai đoạn | Nội dung | Chạm vào VPS chính? | Cách quay lại |
 |---|---|---|---|
-| **0. Chuẩn bị** | Kill 3 tiến trình treo và thêm timeout (F1). Kiểm tra RAM/swap. Thu hẹp token CF (F16). Gắn tag `v0-legacy` cho repo | Thấp | — |
-| **1. Nền tảng** | Tạo DB `dott_cache`, migration, migrate SQLite sang MariaDB (kèm sửa F3). Viết package + `dott-cache status`. Viết test | Thấp (chỉ đọc hệ thống cũ) | Xóa DB `dott_cache` |
-| **2. Worker** | Chạy worker ở chế độ `--dry-run` 1 ngày, rồi dừng renew (screen F1) và bật worker thật | Trung bình | Dừng service, chạy lại renew trong screen |
-| **3. Sự kiện** | Cài mu-plugin, chạy url_sync. Thử: đăng bài thử, sửa bài, chuyển nháp, xem queue rồi S3 rồi KV. Tắt hook comment cũ | Trung bình | Gỡ file mu-plugin (WordPress chạy tiếp như cũ) |
-| **4. Bỏ cron cũ** | Chuyển `url_list/clean_*.txt` và danh sách segment vào `pins`, gỡ 2 cron cũ (F2) | Thấp | Thêm lại dòng crontab |
-| **5. Reconcile + report** | Chạy reconcile ở chế độ chỉ báo cáo 2 tuần, sau đó cho tự sửa (có chặn ngưỡng) | Thấp | Tắt timer |
-| **6. Dọn dẹp** | Xóa `/root/tool/.../cache-tools` cũ (đã có backup), ngừng dùng thư mục PC, cập nhật skill `vps-diaocthongthai` | Thấp | Khôi phục từ tag `v0-legacy` |
+| **0. Chuẩn bị** | Tag `v0-legacy`. Tạo S3 key và CF token mới, quyền hẹp. Lấy CA Cloudflare Origin. Kill 3 tiến trình treo (F1) | Có (kill process, **hỏi trước**) | — |
+| **1. Đo và thử (chỉ đọc)** | Tool Go nhỏ: fetch 50 URL qua origin, so md5 với đĩa (mục 5); đo throttle Netdata; đo băng thông và thời gian | Chỉ đọc | — |
+| **2. Nền tảng** | `dott-cache` với SQLite, import `cache_urls.db`, `status`, test cho `paths` (so với `kv_key()` Python) | Không | Xóa `/var/lib/dott-cache` |
+| **3. mu-plugin** | Cài `dott-cache.php` (bảng sự kiện + REST), thêm `DOTT_CACHE_TOKEN` vào wp-config. Thử đăng/sửa/nháp bài và xem sự kiện | Có (**hỏi trước**, backup wp-config) | Xóa file mu-plugin; bảng sự kiện để lại không ảnh hưởng gì |
+| **4. Worker dry-run** | `dott-cache run --dry-run` 1–2 ngày: nhận sự kiện, tính việc, **không** purge/upload/KV. So với pipeline cũ | Chỉ đọc | Dừng service |
+| **5. Worker thật** | Đợi `en-map-of` xong. Dừng screen F1 (**hỏi trước**). Bật worker thật với render-limiter = 1, theo dõi tải 1 tuần rồi mới tăng lên 2 | Có | Dừng service, chạy lại screen F1 |
+| **6. Bỏ cron cũ** | Chuyển `clean_*.txt` và danh sách segment vào `pins`, gỡ 2 cron cũ (F2) | Có (**hỏi trước**) | Thêm lại dòng crontab |
+| **7. Reconcile + report** | Chế độ chỉ báo cáo 2 tuần, sau đó cho tự sửa (có chặn ngưỡng). Nối `status --json` vào `/root/health` | Chỉ đọc (find hằng tuần) | Tắt timer |
+| **8. Dọn dẹp** | Thu hồi S3 key cũ trên VPS chính, dời code Python vào `legacy/`, cập nhật skill `vps-diaocthongthai` và `vps-claude-control` | Có (**hỏi trước**) | Khôi phục từ tag `v0-legacy` |
 
-## 10. Câu hỏi còn mở
-1. **Kênh thông báo** cho report và cảnh báo: Telegram bot, email, hay chỉ log + `dott-cache status`?
-2. **Khi bấm "Clear all cache"** (`rocket_clean_domain`) hoặc đổi theme/menu: tăng tốc renew toàn bộ (ví dụ hoàn tất trong 3–4 đêm), hay giữ nhịp thường?
-3. **Mục tiêu vòng renew nền**: giữ khoảng 90 ngày, hay rút xuống (ví dụ 30 ngày) cho site en?
-4. **Site `/es/`** (blog 3) có cần cache S3 không? (Hiện DB không có URL `/es/`.)
-5. **Bucket Singapore cho HTML**: Worker chỉ dùng Chicago. Có muốn upload HTML lên cả 2 bucket để phòng Chicago gặp sự cố không (Worker sẽ cần fallback giống `thongthai-cdn-v2.js`)?
-6. **Đồng bộ media sang AP** (F15): đang dùng cơ chế gì? Có cần đưa vào hệ thống này không?
+## 15. Câu hỏi còn mở
+1. **Mục tiêu vòng renew nền:** 30 ngày (đề xuất) hay giữ khoảng 90 ngày? Với 60 nghìn URL, mỗi URL 2 lần render khoảng 3 s, một vòng 30 ngày cần khoảng 2.000 URL/ngày, tức khoảng 1,7 giờ render mỗi ngày.
+2. **Cảnh báo log gần thời gian thực** (mục 10.3): có cần không, hay bản phân tích 23:45 là đủ?
+3. **Key SSH thứ hai cho dott-cache** có `command=` giới hạn (mục 11): đồng ý tạo, hay chỉ dùng REST và bỏ bước 4 của reconcile?
+4. **S3 key và CF token mới, quyền hẹp:** chủ site tự tạo trên Linode/Cloudflare (đề xuất), hay dùng tạm key hiện tại?
+5. **`ignoreip` cho fail2ban** trên VPS chính và **mở Netdata cho IP VPS phụ** khi khóa Netdata: đồng ý đưa vào giai đoạn 0?
+6. **Đồng bộ media sang AP** (F15): giữ ngoài hệ thống này (Media Cloud và `ct-media-s3-upload` đang lo), hay cần đưa phần đối soát media vào reconcile?
