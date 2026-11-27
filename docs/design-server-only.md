@@ -88,7 +88,7 @@ Các quyết định của chủ site (25–27/11):
 
 | Đường | Dùng cho | Đã kiểm tra | Lưu ý |
 |---|---|---|---|
-| **HTTPS origin** `--resolve diaocthongthai.com:443:45.77.32.177` (không qua Cloudflare) | Trigger render, lấy HTML đã cache | ✅ Một file cache được phục vụ trong **khoảng 9 ms**. Bản desktop và mobile khác nhau theo UA. Có header `Last-Modified` = mtime file cache; khi gửi `Accept-Encoding: gzip` thì nhận nguyên file `_gzip` | Chứng chỉ là **Cloudflare Origin CA**, nên Go phải nạp CA gốc của Cloudflare Origin (tải 1 lần, để trong repo), **không dùng InsecureSkipVerify** |
+| **HTTPS origin** `--resolve diaocthongthai.com:443:45.77.32.177` (không qua Cloudflare) | Trigger render, lấy HTML đã cache | ✅ Một file cache được phục vụ trong **khoảng 9 ms**. Bản desktop và mobile khác nhau theo UA. Có header `Last-Modified` = mtime file cache. Không gửi `Accept-Encoding` thì nhận nguyên file `.html` (khớp md5 40/40); gửi gzip thì nginx nén lại lúc gửi, không trả file `_gzip` | Chứng chỉ là **Cloudflare Origin CA**. Go kiểm tra bằng **SPKI pin** của chứng chỉ (`cloudflare_cert.pem`, hạn 2038), không dùng CA và không bỏ qua kiểm tra (rollout-log, giai đoạn 0) |
 | **REST mu-plugin** `/wp-json/dott-cache/v1/*` (cũng gọi thẳng origin) | Lấy sự kiện, danh sách URL, yêu cầu xóa cache đĩa | Chưa có, cần viết | Xác thực bằng header `Authorization: Bearer <token>` **và** chỉ chấp nhận IP `139.180.158.221` (kiểm tra `REMOTE_ADDR` trong PHP). nginx dùng `real_ip_header X-Forwarded-For` nhưng chỉ tin các dải IP Cloudflare (`/etc/nginx/extra/cloudflare.conf`). Vì vậy request đi thẳng từ VPS phụ có `REMOTE_ADDR` = 139.180.158.221, còn request qua Cloudflare mang IP của khách, không giả được IP VPS phụ |
 | **Netdata API** `http://45.77.32.177:19999/api/v1/data?chart=system.cpu...` | Đo CPU/RAM VPS chính để tạm dừng | ✅ khoảng 30 ms | Khi khóa Netdata (TODO_VPS) thì nhớ **mở riêng cho IP VPS phụ** |
 | **`ssh main`** (key `id_main_vps`) | Dự phòng đo tải; đọc danh sách file trên đĩa khi đối soát; thao tác khẩn | ✅ khoảng 0,6 s/lần | Key có `no-port-forwarding`, nên **không mở được SSH tunnel tới MariaDB** (khác checklist mục 4 trong skill `vps-claude-control`). Vì vậy v2 dùng REST, không đọc DB WordPress trực tiếp |
@@ -105,11 +105,11 @@ Giới hạn trên VPS chính cần biết:
 
 | | A. Lấy qua HTTP từ origin (**đề xuất**) | B. Lấy file qua `ssh main` | C. Giữ một agent upload nhỏ trên VPS chính |
 |---|---|---|---|
-| Cách làm | Sau khi trigger, GET lại URL với `Accept-Encoding: gzip` (desktop UA và iPhone UA). nginx trả nguyên file `_gzip`. Giải nén trong RAM để có file `.html` | `ssh main "cat file1 file2 ..."` hoặc `tar` theo lô, nhận về VPS phụ rồi upload | VPS phụ ra lệnh, agent trên VPS chính tự upload S3 như bây giờ |
-| Tải VPS chính | Rất thấp: nginx phục vụ file tĩnh (khoảng 9 ms), chỉ khoảng 2 × 20 KB mỗi URL | Thấp–vừa: mỗi lô tốn một phiên SSH (mã hóa, fork process) | Như hiện tại: TLS tới S3 + SDK + RAM |
-| Chính xác | `_gzip` giống từng byte với file trên đĩa. `.html` = giải nén của `_gzip`, cũng là cách WP Rocket tạo ra 2 file này | Giống từng byte | Giống từng byte |
+| Cách làm | Sau khi trigger, GET lại URL **không gửi `Accept-Encoding`** (desktop UA và iPhone UA), nhận nguyên file `.html` trên đĩa. VPS phụ tự tạo `_gzip` (gzip -9). **Đã kiểm chứng ngày 27/11:** 40/40 file `.html` khớp md5 với đĩa; nginx không trả file `_gzip` mà nén lại lúc gửi, nên không lấy bản gzip qua HTTP (xem rollout-log, giai đoạn 1) | `ssh main "cat file1 file2 ..."` hoặc `tar` theo lô, nhận về VPS phụ rồi upload | VPS phụ ra lệnh, agent trên VPS chính tự upload S3 như bây giờ |
+| Tải VPS chính | Rất thấp: nginx gửi file tĩnh bằng sendfile (8–25 ms), không nén, không gọi PHP | Thấp–vừa: mỗi lô tốn một phiên SSH (mã hóa, fork process) | Như hiện tại: TLS tới S3 + SDK + RAM |
+| Chính xác | `.html` giống từng byte với file trên đĩa (đã kiểm chứng). `_gzip` do VPS phụ tạo, giải nén ra giống hệt `.html` | Giống từng byte | Giống từng byte |
 | Cần quyền gì | Không cần gì thêm | Đọc file bằng root qua SSH | Secret S3 vẫn nằm trên VPS chính |
-| Băng thông | Khoảng 40 KB/URL, 60 nghìn URL khoảng 2,5 GB mỗi vòng renew (Vultr có 2 TB/tháng) | Tương tự | Không đổi |
+| Băng thông | Khoảng 230 KB/URL (2 × 114 KB, chưa nén). 60 nghìn URL khoảng 14 GB mỗi vòng renew | Tương tự | Không đổi |
 
 **Chọn A:**
 - Rẻ nhất cho VPS chính, không cần thêm quyền.
@@ -126,10 +126,11 @@ refresh(path):
   1. purge:   POST /dott-cache/v1/purge {paths:[path]}   # VPS chính gọi rocket_clean_files(), xóa 4 file
   2. trigger: GET origin path, UA desktop   ─┐ đi qua render-limiter (1–2 slot), timeout 60 s
               GET origin path, UA iPhone    ─┘ đo thời gian render → đưa vào throttle (mục 6)
-  3. fetch:   GET lại 2 lần với Accept-Encoding: gzip
-              phải thỏa: 200, Content-Encoding: gzip, Last-Modified >= t0 - 2 s (đúng file mới tạo),
-                         giải nén được, có </html>, có comment "Debug: cached@<ts>" với ts >= t0,
+  3. fetch:   GET lại 2 lần, KHÔNG gửi Accept-Encoding (nhận nguyên file .html trên đĩa)
+              phải thỏa: 200, không có Content-Encoding, Last-Modified >= t0 - 2 s (đúng file mới tạo),
+                         có </html>, có comment "Debug: cached@<ts>" với ts >= t0,
                          > 2 KB, bản mobile khác bản desktop
+              → tự gzip -9 ra 2 file _gzip (khoảng 7 ms/file trên VPS phụ)
               └─ không thỏa → trigger lại 1 lần → vẫn lỗi: fail_count++, đưa lại queue với backoff
   4. upload:  4 object lên S3 Chicago, chạy song song (uploader pool), đúng Content-Type / Content-Encoding
               như tool cũ; kiểm tra ETag = MD5 từng file (F13)
