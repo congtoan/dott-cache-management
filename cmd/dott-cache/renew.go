@@ -2,14 +2,15 @@ package main
 
 // Lệnh renew (bản thử 28/11): tạo lại cache cho 1 URL hoặc một danh sách URL.
 //
-//	dott-cache renew -config /etc/dott-cache/upload-test.json -url https://php81.congtoan.net/tttest/abc/
-//	dott-cache renew -config /etc/dott-cache/upload-test.json -paths list.txt [-limit N] [-keep-s3] [-log out.jsonl]
+//	dott-cache renew -site php81.congtoan.net -url https://php81.congtoan.net/tttest/abc/
+//	dott-cache renew -site php81.congtoan.net -paths list.txt [-limit N] [-keep-s3] [-no-delete] [-log out.jsonl]
 //
 // Các bước (theo thứ tự, dừng nếu một bước hỏng toàn bộ):
 //  1. Xóa object cũ trên MỌI đích S3 (index-https.html và index-mobile-https.html). Bỏ qua bước này với -keep-s3.
 //     Trong lúc chờ, Worker không thấy object nên chuyển khách sang origin, khách không bị lỗi.
-//  2. Gửi danh sách path qua ssh tới VPS chính (cfg.renew.command, đọc từ stdin). Script đó xóa file
-//     cache cũ trên đĩa rồi chạy prefork: bootstrap WordPress một lần cho cả lô.
+//  2. Gửi danh sách path qua ssh tới VPS chính (cfg.renew.command = "/usr/local/sbin/dott-prefork <domain>",
+//     đọc path từ stdin). prefork-render.php của site xóa file cache cũ của từng URL ngay trước khi
+//     render URL đó, và bootstrap WordPress một lần cho mỗi blog.
 //  3. Path nào prefork báo ok thì lấy HTML qua HTTP (lúc này nginx trả file vừa tạo) và upload lên mọi đích.
 
 import (
@@ -37,7 +38,9 @@ type preforkLine struct {
 
 func cmdRenew(args []string) {
 	fs := flag.NewFlagSet("renew", flag.ExitOnError)
-	cfgPath := fs.String("config", "/etc/dott-cache/upload-test.json", "file cấu hình JSON")
+	site := fs.String("site", "", "domain, dùng config/sites/<domain>.json")
+	cfgPath := fs.String("config", "", "file cấu hình JSON (thay cho -site)")
+	noDelete := fs.Bool("no-delete", false, "không xóa file cache cũ trên đĩa VPS chính trước khi render")
 	url := fs.String("url", "", "một URL hoặc path cần renew")
 	pathsFile := fs.String("paths", "", "file danh sách URL/path, mỗi dòng một")
 	limit := fs.Int("limit", 0, "chỉ xử lý N path đầu")
@@ -48,7 +51,11 @@ func cmdRenew(args []string) {
 	if (*url == "") == (*pathsFile == "") {
 		usage()
 	}
-	cfg, clients := setup(*cfgPath)
+	cfg, clients := setup(resolveConfig(*cfgPath, *site))
+	*logPath = defaultLog(*logPath, *site, "renew")
+	if *noDelete {
+		cfg.Renew.Command += " --no-delete"
+	}
 	var paths []string
 	if *url != "" {
 		if err := checkLine(*url, cfg.Origin.Host); err != nil {
@@ -97,6 +104,9 @@ func cmdRenew(args []string) {
 	fmt.Printf("[3/3] lấy HTML và upload: %.1f s\n", time.Since(t).Seconds())
 
 	all := col.finish()
+	if *logPath != "" {
+		fmt.Printf("log: %s\n", *logPath)
+	}
 	summary(all, time.Since(start), cfg.Targets)
 	if bad := failedPaths(all); len(bad) > 0 {
 		fmt.Printf("\n%d path chưa xong:\n", len(bad))

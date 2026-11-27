@@ -18,7 +18,7 @@ while read p; do curl -sk --resolve php81.congtoan.net:443:127.0.0.1 -A "$D" -o 
   cp "$C${p}index-https.html" "/tmp/pf-http/$(echo $p | md5sum | cut -c1-12).html"; done < $PF/sample.txt
 # 2) Xóa lại, prefork render
 while read p; do rm -rf "$C$p"index-https.html* ; done < $PF/sample.txt
-runuser -u php81conZSI -- php $PF/prefork-render.php --root=$Q --host=php81.congtoan.net --urls=$PF/sample.txt --parallel=1 --readonly --out=$PF/sample.jsonl
+runuser -u php81conZSI -- php $Q/wp-content/mu-plugins/dott-cache/prefork-render.php --root=$Q --host=php81.congtoan.net --urls=$PF/sample.txt --parallel=1 --readonly --out=$PF/sample.jsonl
 # 3) So sánh (bỏ qua dòng cached@ / honeypot / nonce LCP)
 norm() { sed -E 's/cached@[0-9]+/cached@X/; s/wpa_field_info = JSON.parse\(atob\("[^"]*"\)\)/wpa_field_info=X/; s/"nonce":"[0-9a-f]+"/"nonce":"X"/g; s/data-token-time="[0-9]+"/data-token-time="X"/g' "$1"; }
 same=0; diffc=0

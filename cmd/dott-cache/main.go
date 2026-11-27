@@ -2,9 +2,11 @@
 //
 // Bản thử (27–28/11): các lệnh upload, delete, renew (renew.go).
 //
-//	dott-cache upload -config /etc/dott-cache/upload-test.json -paths paths.txt [-limit N] [-mobile-copy] [-log out.jsonl]
-//	dott-cache delete -config ... -paths paths.txt      # xóa object đã upload (dọn bucket test)
-//	dott-cache renew  -config ... -url URL | -paths list.txt   # xóa cache cũ (S3 + đĩa), prefork, upload
+//	dott-cache upload -site php81.congtoan.net -paths paths.txt [-limit N] [-mobile-copy] [-log out.jsonl]
+//	dott-cache delete -site ... -paths paths.txt      # xóa object đã upload (dọn bucket test)
+//	dott-cache renew  -site ... -url URL | -paths list.txt   # xóa cache cũ (S3 + đĩa), prefork, upload
+//
+// Thư mục trên VPS phụ: /root/tool/cache-system/{bin,src,config/{sites,secrets},data,logs,test}.
 //
 // Luồng upload: đọc danh sách path → pool lấy HTML từ origin (gọi thẳng IP, nhận file cache
 // nguyên văn) → mỗi trang được đẩy song song lên MỌI đích S3, mỗi đích một pool riêng.
@@ -20,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -61,10 +64,11 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `dùng:
-  dott-cache upload -config file.json -paths paths.txt [-limit N] [-mobile-copy] [-log out.jsonl]
-  dott-cache delete -config file.json -paths paths.txt
-  dott-cache renew  -config file.json (-url URL | -paths paths.txt) [-limit N] [-keep-s3] [-log out.jsonl]`)
+	fmt.Fprintln(os.Stderr, `dùng (thư mục gốc: $DOTT_CACHE_HOME, mặc định /root/tool/cache-system):
+  dott-cache upload -site <domain> -paths paths.txt [-limit N] [-mobile-copy] [-log out.jsonl]
+  dott-cache delete -site <domain> -paths paths.txt
+  dott-cache renew  -site <domain> (-url URL | -paths paths.txt) [-limit N] [-keep-s3] [-no-delete] [-log out.jsonl]
+  -site <domain> dùng config/sites/<domain>.json; -config <file> thay cho -site. Không có -log thì ghi vào logs/<domain>/.`)
 	os.Exit(2)
 }
 
@@ -189,6 +193,42 @@ type result struct {
 	Err      string  `json:"err,omitempty"`
 }
 
+// home: thư mục gốc của hệ thống trên VPS phụ (bin/, config/, data/, logs/, src/, test/).
+func home() string {
+	if h := os.Getenv("DOTT_CACHE_HOME"); h != "" {
+		return h
+	}
+	return "/root/tool/cache-system"
+}
+
+// resolveConfig: -config (đường dẫn) có ưu tiên; nếu không có thì dùng -site <domain>,
+// tương ứng với file config/sites/<domain>.json.
+func resolveConfig(cfgPath, site string) string {
+	switch {
+	case cfgPath != "":
+		return cfgPath
+	case site != "":
+		if strings.ContainsAny(site, "/\\") || strings.HasPrefix(site, ".") {
+			die("tên site không hợp lệ: %q", site)
+		}
+		return filepath.Join(home(), "config", "sites", site+".json")
+	}
+	die("cần -site <domain> hoặc -config <file>")
+	return ""
+}
+
+// defaultLog: khi không có -log và có -site, ghi log vào logs/<site>/<lệnh>-<thời gian>.jsonl.
+func defaultLog(logPath, site, cmd string) string {
+	if logPath != "" || site == "" {
+		return logPath
+	}
+	dir := filepath.Join(home(), "logs", site)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		die("tạo thư mục log: %v", err)
+	}
+	return filepath.Join(dir, cmd+"-"+time.Now().Format("20060102-150405")+".jsonl")
+}
+
 // setup đọc config, key S3 và tạo client cho mọi đích.
 func setup(cfgPath string) (Config, []*s3.Client) {
 	raw, err := os.ReadFile(cfgPath)
@@ -263,7 +303,8 @@ func (c *collector) finish() []result {
 
 func cmdUpload(args []string, del bool) {
 	fs := flag.NewFlagSet("upload", flag.ExitOnError)
-	cfgPath := fs.String("config", "/etc/dott-cache/upload-test.json", "file cấu hình JSON")
+	site := fs.String("site", "", "domain, dùng config/sites/<domain>.json")
+	cfgPath := fs.String("config", "", "file cấu hình JSON (thay cho -site)")
 	pathsFile := fs.String("paths", "", "file danh sách path (mỗi dòng một path hoặc URL)")
 	limit := fs.Int("limit", 0, "chỉ xử lý N path đầu")
 	mobileCopy := fs.Bool("mobile-copy", false, "upload thêm cùng nội dung lên key index-mobile-https.html (giai đoạn chuyển tiếp)")
@@ -272,7 +313,8 @@ func cmdUpload(args []string, del bool) {
 	if *pathsFile == "" {
 		usage()
 	}
-	cfg, clients := setup(*cfgPath)
+	cfg, clients := setup(resolveConfig(*cfgPath, *site))
+	*logPath = defaultLog(*logPath, *site, map[bool]string{false: "upload", true: "delete"}[del])
 	paths := readPaths(*pathsFile, *limit, cfg.Origin.Host)
 	files := []string{"index-https.html"}
 	if *mobileCopy {

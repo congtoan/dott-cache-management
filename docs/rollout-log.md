@@ -241,5 +241,43 @@ Mục đích: mô phỏng diaocthongthai.com để test tt-core, cache một b�
   - Hướng cải thiện: dùng `DeleteObjects` (tối đa 1000 key mỗi request), hoặc dùng `-keep-s3`, vì PUT vẫn ghi đè.
 - **Chưa kiểm chứng:** prefork ghi đè lên file cache **đang có**. Script bọc luôn xóa file trước, nên trường hợp này chưa xảy ra.
 
+### Bố cục mới: `/root/tool/cache-system` trên VPS phụ, prefork nằm trong website (28/11, chủ site đồng ý)
+- Thiết kế: design mục 11b.
+- **VPS phụ:**
+  - `/opt/dott-cache` và `/etc/dott-cache` được chuyển hết về `/root/tool/cache-system/{bin,src,config/{sites,secrets},data,logs,test}`. Mọi thư mục là 700.
+  - Key S3 được `mv` sang `config/secrets/s3.env` (600), không sao chép.
+  - Config test cũ nằm ở `test/old-config/`.
+  - `/usr/local/bin/dott-cache` là symlink tới `bin/dott-cache`.
+  - `/root/.claude/settings.json` thêm 3 luật cấm đọc `config/secrets` (giữ luật cũ). Backup: `settings.json.bak-2026-11-28`.
+- **VPS chính:**
+  - `prefork-render.php` mới cài ở `php81.../wp-content/mu-plugins/dott-cache/` (user site, 644). Gọi qua HTTP trả 200 với 0 byte, không chạy gì.
+  - Bộ chuyển lệnh cài ở `/usr/local/sbin/dott-prefork` (root, 755). Domain lạ bị từ chối.
+  - Đã xóa `/root/dott-renew/`.
+  - Bản cũ `/home/php81conZSI/prefork/` (dữ liệu đo 27/11) **vẫn để lại**.
+- **Thay đổi trong prefork:**
+  - đọc path từ stdin;
+  - tự lọc path;
+  - tự chia blog: lấy danh sách site bằng một lần bootstrap riêng, lưu tạm 10 phút;
+  - xóa cache cũ của **từng URL ngay trước khi render** bằng `unlink`;
+  - báo lỗi mọi path không có kết quả.
+- **Đo tốc độ xóa** (1.200 file trong `/tmp` trên VPS chính, đã dọn):
+
+| Cách xóa | Thời gian |
+|---|---|
+| bash vòng lặp gọi `rm` cho từng file | 555–562 ms |
+| `xargs rm -f` | 25 ms |
+| PHP `unlink`, tính cả 23 ms khởi động | 30–66 ms |
+
+- **Test lại với `dott-cache renew -site php81.congtoan.net`:**
+
+| Test | Kết quả |
+|---|---|
+| 1 URL | 3,1 s: prefork 1,7 s, gồm lần đầu lấy danh sách site |
+| 303 URL | 57,6 s (trước đây 60,6 s): prefork 26,5 s (trước đây 30,5 s), 300 ok, 3 lỗi được báo đúng. Load VPS chính tối đa 0,49 |
+
+  - Object trên cả 2 bucket có `Content-Type: text/html; charset=utf-8`, bắt đầu bằng `<!DOCTYPE html>`, có `cached@` mới.
+  - Log tự ghi vào `logs/php81.congtoan.net/renew-<thời gian>.jsonl`.
+- **Lỗi của Claude khi sửa tài liệu (đã khôi phục, chưa commit):** một lệnh PowerShell thay chuỗi hàng loạt bị tách cặp thay thế thành từng ký tự, và thay mọi chữ "S" thành "c" trong `findings-php-render`. Đã khôi phục từ git rồi sửa lại bằng Edit.
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.

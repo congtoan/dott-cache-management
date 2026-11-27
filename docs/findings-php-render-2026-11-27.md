@@ -97,7 +97,7 @@ Với vòng renew 30 ngày (khoảng 2.000 URL/ngày): v2 thường cần khoả
 
 ## 4b. Prefork ghi cache thật (php81, 27/11 khuya)
 
-Script: `tools/prefork/prefork-render.php` (repo). Master bootstrap WordPress một lần, fork một tiến trình con cho mỗi URL. Tiến trình con render trang, chạy `rocket_buffer`, rồi gọi `WP_Rocket\Buffer\Cache::maybe_process_buffer()` để **chính WP Rocket ghi file cache** (footer `cached@`, file `_gzip`, đúng đường dẫn). Chạy dưới user của site, kết nối DB ở chế độ `READ ONLY`, con tự kết thúc bằng SIGKILL.
+Script: `tools/prefork/prefork-render.php` (repo; từ 28/11 ở `wp/mu-plugins/dott-cache/prefork-render.php`, nằm trong website). Master bootstrap WordPress một lần, fork một tiến trình con cho mỗi URL. Tiến trình con render trang, chạy `rocket_buffer`, rồi gọi `WP_Rocket\Buffer\Cache::maybe_process_buffer()` để **chính WP Rocket ghi file cache** (footer `cached@`, file `_gzip`, đúng đường dẫn). Chạy dưới user của site, kết nối DB ở chế độ `READ ONLY`, con tự kết thúc bằng SIGKILL.
 
 **Các bẫy đã gặp và cách xử lý:**
 1. **Bootstrap bằng GET**, tới một path chắc chắn không có cache (`/<blog>/dott-prefork-boot-<pid>/`), rồi đóng mọi bộ đệm còn mở. Lúc đầu dùng POST: kết quả vẫn thiếu phần tối ưu, nhưng nguyên nhân thật là điểm 3.

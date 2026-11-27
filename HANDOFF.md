@@ -78,8 +78,8 @@ Header S3 phải giữ khi upload: `ContentType: text/html`, `CacheControl: publ
 - **php81.congtoan.net là môi trường test:**
   - Site 3 `/tttest/` (vi, 1.000 bài thật) và site 4 `/tttest-en/` (en, 218 bài `map_*`), cùng plugin và thiết lập lấy từ production (bỏ license), cấu hình ACF, `WP_DEBUG_DISPLAY` = false.
   - **Không có Redis**, nên render chậm hơn production.
-- **Bucket test** `congtoanphp` (us-ord-1, eu-central-1). Key S3 nằm ở `/etc/dott-cache/s3.env` trên VPS phụ (600; Claude trên VPS phụ bị cấm đọc).
-- **Go uploader thử** `/opt/dott-cache/bin/dott-cache upload` (code: `cmd/`, `internal/`):
+- **Bucket test** `congtoanphp` (us-ord-1, eu-central-1). Key S3 nằm ở `/root/tool/cache-system/config/secrets/s3.env` trên VPS phụ (600; Claude trên VPS phụ bị cấm đọc).
+- **Go uploader thử** `dott-cache upload -site php81.congtoan.net` (binary `/root/tool/cache-system/bin/`) (code: `cmd/`, `internal/`):
   - 1.024 URL × 2 bucket: **42,9 URL/s** với 16 luồng mỗi đích khi đã có cache, 0 lỗi, md5 khớp đĩa.
   - Khi phải render qua HTTP: 1,1 URL/s.
 - **Prefork ghi cache thật** (`tools/prefork/`):
@@ -88,7 +88,7 @@ Header S3 phải giữ khi upload: `ContentType: text/html`, `CacheControl: publ
   - Trên production dự kiến chỉ nhanh khoảng 3–5 lần (vì có Redis). **Chưa đo trên production.**
 
 - **Tool renew (28/11)**, chạy trên VPS phụ: `dott-cache renew -url URL` hoặc `-paths list.txt`.
-  - Các bước: xóa object S3 → `ssh main` tới `/root/dott-renew/renew.sh` (xóa file cache cũ, prefork theo blog) → lấy HTML qua HTTP → upload mọi đích.
+  - Các bước: xóa object S3 → `ssh main` tới `/usr/local/sbin/dott-prefork <domain>`, lệnh này gọi `wp-content/mu-plugins/dott-cache/prefork-render.php` của site bằng user của site (xóa cache cũ của từng URL ngay trước khi render, chia theo blog) → lấy HTML qua HTTP → upload mọi đích.
   - 1 URL mất 2,6 s. 303 URL mất 60,6 s, 300 ok, 3 lỗi được báo đúng.
   - Đã sửa lỗi font chữ trên S3: thêm `charset=utf-8` và từ chối HTML có PHP Notice.
   - Chi tiết: rollout-log.

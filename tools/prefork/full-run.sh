@@ -13,7 +13,7 @@ echo "URL: $(wc -l < $PF/all.txt), file cache còn lại sau khi xóa: $(find $Q
 ( while true; do cut -d' ' -f1 /proc/loadavg; sleep 5; done ) > /tmp/pf-load.txt &
 S=$!
 /usr/bin/time -f "tiến trình master: %e s, RAM tối đa %M KB, CPU %P" \
-  runuser -u php81conZSI -- php $PF/prefork-render.php --root=$Q --host=php81.congtoan.net --urls=$PF/all.txt \
+  runuser -u php81conZSI -- php $Q/wp-content/mu-plugins/dott-cache/prefork-render.php --root=$Q --host=php81.congtoan.net --urls=$PF/all.txt \
     --parallel=$P --readonly --out=$PF/all-p$P.jsonl 2>&1 | grep -v 'wpdb must set' | grep -v '^\s*$'
 kill $S
 echo "load 1 phút trong lúc chạy: max $(sort -n /tmp/pf-load.txt | tail -1), trung bình $(awk '{s+=$1} END {printf "%.2f", s/NR}' /tmp/pf-load.txt) ($(wc -l < /tmp/pf-load.txt) mẫu)"

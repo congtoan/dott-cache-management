@@ -1,0 +1,47 @@
+#!/bin/bash
+# dott-prefork: bộ chuyển lệnh của root trên VPS chính. Cài ở /usr/local/sbin/dott-prefork (root, 755).
+#
+#   printf '/tttest/abc/\n' | dott-prefork php81.congtoan.net [--no-delete]
+#
+# Bộ chuyển lệnh này chỉ có 4 việc:
+#   1. tra domain → user và thư mục site theo danh sách cố định bên dưới;
+#   2. giữ khóa chung cho MỌI site, vì chúng dùng chung 1 vCPU, nên mỗi lúc chỉ một lô chạy;
+#   3. hạ ưu tiên CPU và ổ đĩa (nice, ionice);
+#   4. chạy prefork-render.php của chính site đó, BẰNG USER CỦA SITE.
+# Mọi logic (lọc path, xóa cache cũ, chia blog, render) nằm trong prefork-render.php, tức là nằm
+# trong website (wp-content/mu-plugins/dott-cache/), được backup cùng website.
+# Site có sửa file PHP đó thì file cũng chỉ chạy bằng quyền của site: không có đường leo lên root.
+# Sau này key SSH riêng của service sẽ bị khóa vào lệnh này (command= trong authorized_keys).
+set -uo pipefail
+
+site="${1:-}"
+case "$site" in
+  php81.congtoan.net) user=php81conZSI; root=/home/php81conZSI/php81.congtoan.net/public_html ;;
+  # diaocthongthai.com) user=diaocthDP4f; root=/home/diaocthDP4f/diaocthongthai.com/public_html ;;  # chưa bật
+  *) echo "# domain không được phép: '$site'"; echo "DONE ok=0 fail=0 skip=0"; exit 2 ;;
+esac
+shift
+
+extra=()
+for a in "$@"; do
+  case "$a" in
+    --no-delete) extra+=("$a") ;;
+    *) echo "# bỏ qua tham số không được phép: $a" ;;
+  esac
+done
+
+script="$root/wp-content/mu-plugins/dott-cache/prefork-render.php"
+if [ ! -f "$script" ]; then
+  echo "# thiếu $script"; echo "DONE ok=0 fail=0 skip=0"; exit 2
+fi
+
+exec 9>/run/dott-prefork.lock
+if ! flock -w 900 9; then
+  echo "# đang có lô khác chạy quá 15 phút, bỏ"; echo "DONE ok=0 fail=0 skip=0"; exit 3
+fi
+
+# stdin (danh sách path) được chuyển thẳng cho PHP.
+nice -n 10 ionice -c2 -n7 runuser -u "$user" -- php "$script" \
+  --root="$root" --host="$site" --urls=- --parallel=1 --readonly "${extra[@]}" 2>&1 \
+  | grep --line-buffered -v -e 'wpdb must set' -e '^[[:space:]]*$'
+exit "${PIPESTATUS[0]}"

@@ -47,10 +47,11 @@ cmd/dott-cache/         ← Go: CLI/service (prototype: `upload`, `delete`, `ren
 internal/origin/        ← Go: gọi origin với SPKI pin
 internal/s3/            ← Go: S3 SigV4, chỉ dùng stdlib, pool nhiều đích
 go.mod
-wp/mu-plugins/          ← mu-plugin WordPress (dott-single-cache.php; sắp có dott-cache.php: sự kiện + REST)
+wp/mu-plugins/          ← mu-plugin WordPress: dott-single-cache.php, dott-cache/prefork-render.php (prefork, nằm trong website); sắp có dott-cache.php (sự kiện + REST)
 deploy/nginx/           ← rocket-page-cache.conf (rocket-nginx)
+deploy/vps-main/        ← dott-prefork: bộ chuyển lệnh của root trên VPS chính
 theme/                  ← tt-core: engine build JS, module vi/en, functions.php mới (xem theme/README.md)
-tools/prefork/          ← render hàng loạt bằng fork, ghi cache WP Rocket thật; renew.sh: script bọc cho `dott-cache renew`
+tools/prefork/          ← script đo/so sánh prefork (compare-20.sh, full-run.sh)
 tools/lab-2026-11-27/   ← script đo/thử dùng cho findings (chỉ đọc)
 docs/
   SUMMARY-2026-11-27.md              ⭐ tổng kết đợt prototype, số đo, việc tiếp theo
@@ -70,4 +71,4 @@ secrets.example.json    ← mẫu; secrets.json thật bị gitignore
 
 ## Bí mật
 `secrets.json`, `credentials.json` và `.claude/skills/vps-diaocthongthai/` đều bị gitignore, **không bao giờ commit**.
-Key S3 của service nằm ở `/etc/dott-cache/s3.env` trên VPS phụ.
+Key S3 của service nằm ở `/root/tool/cache-system/config/secrets/s3.env` trên VPS phụ.

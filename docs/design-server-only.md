@@ -22,7 +22,7 @@ Các quyết định của chủ site (25–27/11):
 - `/es/` bỏ qua.
 - **Không** upload HTML lên bucket Singapore.
 - (27/11 tối) **Một bản HTML** cho desktop và mobile (tt-core). Upload S3 do pool Go trên VPS phụ làm. **Nhiều đích S3** (đang test Chicago và Frankfurt). Đổi version thì sửa HTML cache và purge Cloudflare. Test trên php81.congtoan.net, chưa đụng site chính. Xem mục 5b, 5c, 14b.
-- Dùng repo `dott-cache-management`. Code mới nằm ở `D:\Claude\2026-11-27 Cache System v2`. Trên server: `/opt/dott-cache` (VPS phụ) và `/root/tool/diaocthongthai.com/cache-system` (phần nhỏ còn lại trên VPS chính, nếu có).
+- Dùng repo `dott-cache-management`. Code mới nằm ở `D:\Claude\2026-11-27 Cache System v2`. Trên server: `/root/tool/cache-system/` (VPS phụ, mọi tool và cấu hình); trên VPS chính chỉ có `prefork-render.php` trong từng website và bộ chuyển lệnh `/usr/local/sbin/dott-prefork` (mục 11b).
 
 ## 1. Nguyên tắc
 
@@ -69,7 +69,7 @@ Các quyết định của chủ site (25–27/11):
  │   • hook publish/unpublish/slug/term/... │   REST/HTTPS │  ┌─ poller ──── GET /changes (30 s) ─────────┐   │
  │     → INSERT thai_dott_cache_events      │◄─────────────┼──┤             POST /ack                      │   │
  │   • REST /wp-json/dott-cache/v1/          │  token + IP  │  │                                             ▼   │
- │      changes, ack, urls, purge, health   │              │  │   SQLite /var/lib/dott-cache/state.db       │   │
+ │      changes, ack, urls, purge, health   │              │  │   SQLite data/<domain>/state.db             │   │
  │                                          │              │  │   urls · queue · pins · runs · state        │   │
  │ nginx + rocket-nginx                     │   HTTPS      │  │                                             │   │
  │  file tĩnh wp-rocket/... (Last-Modified) │◄─────────────┼──┤ render-limiter (1–2 slot) ◄── throttle ──┐  │   │
@@ -317,7 +317,7 @@ Lỗi trong mu-plugin chỉ ghi `error_log`, **không bao giờ làm hỏng thao
 | `GET /health` | Phiên bản plugin, số sự kiện đang chờ, `MemAvailable` (dự phòng cho throttle) |
 
 Bảo mật:
-- Token dài (để trong `wp-config.php` dưới dạng hằng `DOTT_CACHE_TOKEN`, và trong `/etc/dott-cache/env` trên VPS phụ).
+- Token dài (để trong `wp-config.php` dưới dạng hằng `DOTT_CACHE_TOKEN`, và trong `config/secrets/` trên VPS phụ).
 - Chỉ chấp nhận IP `139.180.158.221`; khi gọi qua Cloudflare thì trả 404.
 - Không có endpoint nào trả nội dung nhạy cảm.
 
@@ -374,7 +374,7 @@ Một binary `dott-cache` với nhiều lệnh con:
 | mu-plugin `dott-cache.php` | PHP trên VPS chính | theo sự kiện | 0 | hook comment trong `ct-site-enhancer` |
 
 **Lợi ích Go áp dụng cụ thể:**
-- **RAM thấp, một file chạy:** build trên PC (`$env:GOOS="linux"; $env:GOARCH="amd64"; go build`), chép lên `/opt/dott-cache/bin/`. VPS phụ không cần cài Go, không có venv, không có lỗi wheel của Python 3.14.
+- **RAM thấp, một file chạy:** build trên PC (`$env:GOOS="linux"; $env:GOARCH="amd64"; go build`), chép lên `/root/tool/cache-system/bin/` (hiện đang build ngay trên VPS phụ). VPS phụ không cần cài Go, không có venv, không có lỗi wheel của Python 3.14.
 - **Goroutine với giới hạn riêng cho từng loại việc:**
   - render-limiter **1–2** (tài nguyên quý nhất: CPU VPS chính)
   - fetch file tĩnh **2–4**
@@ -385,22 +385,54 @@ Một binary `dott-cache` với nhiều lệnh con:
 - **Tắt an toàn:** nhận SIGTERM thì ngừng nhận việc mới, làm xong URL đang dở, ghi SQLite rồi thoát. `systemctl restart` không làm mất việc.
 - Thư viện dự kiến: `aws-sdk-go-v2` (endpoint Linode `us-ord-1`), `modernc.org/sqlite`, `net/http` chuẩn (Cloudflare API, REST, Netdata, Telegram), `golang.org/x/crypto/ssh` hoặc gọi `ssh` của hệ thống cho `ssh main`.
 
-Unit systemd theo mẫu của skill `vps-claude-control` (`references/deploy-service.md`):
-- User riêng `dott-cache`, `ProtectSystem=strict`, `ReadWritePaths=/var/lib/dott-cache`.
-- Secret trong `/etc/dott-cache/env` (chmod 600).
-- `CPUQuota=50%`, `Nice=10`.
+Unit systemd theo mẫu của skill `vps-claude-control` (`references/deploy-service.md`), **chỉnh lại 28/11 theo bố cục mục 11b**:
+- Chạy bằng **root**, vì mọi thứ nằm trong `/root/tool/cache-system` (700). Giới hạn bằng `ProtectSystem=strict`, `ReadWritePaths=/root/tool/cache-system/data /root/tool/cache-system/logs`, `PrivateTmp=yes`, `NoNewPrivileges=yes`. Cách này kém hơn một chút so với dùng user riêng; chủ site đã chọn đổi lấy việc mọi thứ nằm một chỗ.
+- Secret trong `/root/tool/cache-system/config/secrets/` (700, file 600).
+- `CPUQuota=50%`, `Nice=10`, `MemoryMax=120M`.
 - Riêng `ssh main` cần đọc key `/root/.ssh/id_main_vps`. Phương án: tạo **key thứ hai riêng cho dott-cache** trên VPS chính với `command=` giới hạn đúng 2 lệnh (`find` đối soát, `cat /proc/loadavg`), không dùng chung key của Claude (**cần chủ site đồng ý**).
+
+### 11b. Bố cục thư mục (chốt 2026-11-28)
+
+**VPS phụ: mọi thứ nằm trong `/root/tool/cache-system/`. Chỉ một tool và một service cho mọi website; cấu hình và dữ liệu tách theo domain.**
+```
+/root/tool/cache-system/          (700, root)
+  bin/dott-cache                  một binary cho mọi site (/usr/local/bin/dott-cache là symlink tới đây)
+  src/                            mã nguồn (bản sao repo), build tại chỗ
+  config/
+    global.json                   (sắp có) Telegram, ssh host, giới hạn tải VPS chính, giờ chạy
+    secrets/                      s3.env, cf.env (700, file 600; Claude trên VPS phụ bị cấm đọc)
+    sites/<domain>.json           origin, bucket S3, renew.command, (sau này) KV, lịch renew
+  data/<domain>/state.db          SQLite riêng từng site
+  logs/<domain>/<lệnh>-<thời gian>.jsonl
+  test/
+```
+- Lệnh có `-site <domain>`, tương ứng `config/sites/<domain>.json`. `-config <file>` dùng thay khi cần.
+- Chỉ một service, vì **mọi site dùng chung 1 vCPU của VPS chính**: bộ điều phối phải biết tổng tải và không bao giờ chạy 2 lô prefork cùng lúc. Tách cấu hình và dữ liệu theo domain để thêm, xóa, làm lại hay backup từng site riêng.
+- `/opt/dott-cache` và `/etc/dott-cache` (dùng 27/11) đã bỏ. Key được chuyển sang `config/secrets/` bằng `mv`, không sao chép.
+
+**VPS chính: prefork nằm trong từng website.**
+- `wp-content/mu-plugins/dott-cache/prefork-render.php` (nguồn: `wp/mu-plugins/dott-cache/`):
+  - WordPress không tự nạp file trong thư mục con của `mu-plugins/`, và script tự thoát nếu không chạy bằng CLI;
+  - được backup cùng website;
+  - toàn bộ logic nằm ở đây: lọc path, chia blog, xóa cache cũ của từng URL ngay trước khi render (bằng `unlink`, khoảng 7 ms cho 1.200 file; một vòng lặp bash gọi `rm` cho từng file mất 560 ms), render, ghi cache.
+- Ngoài website chỉ có **bộ chuyển lệnh** `/usr/local/sbin/dott-prefork` (root, 755; nguồn: `deploy/vps-main/dott-prefork`). Nó:
+  - tra domain → user và thư mục theo danh sách cố định;
+  - giữ khóa chung `/run/dott-prefork.lock` cho mọi site;
+  - chạy với `nice`/`ionice`;
+  - gọi PHP của site **bằng user của site**. Site có sửa file PHP thì cũng không leo lên root được.
+- Sau này key SSH riêng của service sẽ bị khóa vào lệnh này (`command=` trong `authorized_keys`).
+- Thêm site mới: thêm một dòng `case` vào `dott-prefork`, chép `prefork-render.php` vào site, thêm `config/sites/<domain>.json` trên VPS phụ. Site phải dùng WP Rocket.
 
 ## 12. Bí mật và bảo mật
 
 | Bí mật | Nằm ở | Ghi chú |
 |---|---|---|
-| S3 Linode key | `/etc/dott-cache/s3.env` (VPS phụ, root 600, **đã có từ 27/11**, cùng key bucket Chicago hiện tại; Claude trên VPS phụ bị cấm đọc) | Nên tạo **key mới chỉ có quyền trên bucket `cdn.diaocthongthai.com`** thay vì copy key hiện tại. Thu hồi key cũ trên VPS chính sau khi chuyển xong |
+| S3 Linode key | `/root/tool/cache-system/config/secrets/s3.env` (VPS phụ, root 600, **đã có từ 27/11**, cùng key bucket Chicago hiện tại; Claude trên VPS phụ bị cấm đọc) | Nên tạo **key mới chỉ có quyền trên bucket `cdn.diaocthongthai.com`** thay vì copy key hiện tại. Thu hồi key cũ trên VPS chính sau khi chuyển xong |
 | Cloudflare token | như trên | Token riêng, chỉ có quyền **Workers KV Storage:Edit** trên account (F16); không dùng chung token đã dán trong chat |
 | `DOTT_CACHE_TOKEN` (REST) | `wp-config.php` + env VPS phụ | Sinh ngẫu nhiên 48 ký tự |
 | Telegram bot | dùng chung với `/root/health` | |
 
-- Claude trên VPS phụ đang bị cấm đọc `/root/.ssh/id_*`. Thêm `/etc/dott-cache/**` vào danh sách cấm trong `/root/.claude/settings.json`; **cần chủ site đồng ý** vì đây là thay đổi quyền.
+- Claude trên VPS phụ bị cấm đọc `/root/.ssh/id_*`, `/etc/dott-cache/**` (luật cũ, giữ lại) và `/root/tool/cache-system/config/secrets/**` (thêm 28/11), trong `/root/.claude/settings.json`.
 - Service Go **không mở cổng nào ra ngoài**: chỉ gọi đi, không lắng nghe; endpoint `/health` nếu có thì chỉ bind `127.0.0.1`. UFW VPS phụ giữ như hiện tại (chỉ 22/tcp).
 
 ## 13. Cấu trúc repo mới
@@ -409,7 +441,7 @@ Unit systemd theo mẫu của skill `vps-claude-control` (`references/deploy-ser
 dott-cache-management/
 ├── cmd/dott-cache/main.go          # lệnh con: run | sync | reconcile | report | status | enqueue | pin | pause | resume
 ├── internal/
-│   ├── config/                     # đọc /etc/dott-cache/config.json + env
+│   ├── config/                     # đọc config/global.json + config/sites/<domain>.json (mục 11b)
 │   ├── paths/                      # normalize (giống Worker + kv_key() của u2 v3.4), path → 4 key S3
 │   ├── store/                      # SQLite: schema, migration, writer duy nhất
 │   ├── origin/                     # HTTP tới origin: CA Cloudflare Origin, trigger, fetch + verify
@@ -420,6 +452,9 @@ dott-cache-management/
 │   ├── reconcile/
 │   └── notify/                     # Telegram
 ├── wp/mu-plugins/dott-cache.php    # hook sự kiện + REST endpoint
+├── wp/mu-plugins/dott-cache/prefork-render.php   # prefork (nằm trong website, mục 11b)
+├── wp/mu-plugins/dott-single-cache.php           # một bản cache cho mọi thiết bị
+├── deploy/vps-main/dott-prefork    # bộ chuyển lệnh của root trên VPS chính
 ├── deploy/systemd/*.service, *.timer, deploy/install.sh
 ├── certs/cloudflare-origin-ca.pem
 ├── tools/                          # chạy một lần: import cache_urls.db, so md5 HTTP ↔ đĩa
@@ -442,7 +477,7 @@ dott-cache-management/
 |---|---|---|---|
 | **0. Chuẩn bị** | Tag `v0-legacy`. Tạo S3 key và CF token mới, quyền hẹp. Lấy CA Cloudflare Origin. Kill 3 tiến trình treo (F1) | Có (kill process, **hỏi trước**) | — |
 | **1. Đo và thử (chỉ đọc)** | Tool Go nhỏ: fetch 50 URL qua origin, so md5 với đĩa (mục 5); đo throttle Netdata; đo băng thông và thời gian | Chỉ đọc | — |
-| **2. Nền tảng** | `dott-cache` với SQLite, import `cache_urls.db`, `status`, test cho `paths` (so với `kv_key()` Python) | Không | Xóa `/var/lib/dott-cache` |
+| **2. Nền tảng** | `dott-cache` với SQLite, import `cache_urls.db`, `status`, test cho `paths` (so với `kv_key()` Python) | Không | Xóa `data/<domain>/` |
 | **3. mu-plugin** | Cài `dott-cache.php` (bảng sự kiện + REST), thêm `DOTT_CACHE_TOKEN` vào wp-config. Thử đăng/sửa/nháp bài và xem sự kiện | Có (**hỏi trước**, backup wp-config) | Xóa file mu-plugin; bảng sự kiện để lại không ảnh hưởng gì |
 | **4. Worker dry-run** | `dott-cache run --dry-run` 1–2 ngày: nhận sự kiện, tính việc, **không** purge/upload/KV. So với pipeline cũ | Chỉ đọc | Dừng service |
 | **5. Worker thật** | Đợi `en-map-of` xong. Dừng screen F1 (**hỏi trước**). Bật worker thật với render-limiter = 1, theo dõi tải 1 tuần rồi mới tăng lên 2 | Có | Dừng service, chạy lại screen F1 |
