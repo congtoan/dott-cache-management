@@ -203,6 +203,23 @@ Chủ site chốt hướng (27/11):
 
 Các số trên là **ước tính**, sẽ đo lại trên php81 (mục 14b) và với bucket test.
 
+### Gom về một bản HTML: WP Rocket tạo file gì, và các bước chuyển
+
+Đã đo trên php81 (27/11):
+
+| Thiết lập WP Rocket | File mỗi URL |
+|---|---|
+| Hiện tại của production: `cache_mobile` = 1, `do_caching_mobile_files` = 1 | `index-https.html`, `index-https.html_gzip`, `index-mobile-https.html`, `index-mobile-https.html_gzip` và file `.mobile-active` trong thư mục |
+| **Tắt "Separate cache for mobile"** (`/tttest/`) | Chỉ còn `index-https.html` + `index-https.html_gzip`. Không còn `.mobile-active`. Mobile và desktop nhận cùng file |
+
+- `_gzip` do WP Rocket luôn tạo khi PHP có `gzencode`. Không có tùy chọn tắt, chỉ chỉnh được mức nén (filter `rocket_gzencode_level_compression`). **Nên giữ**: khi đã có rocket-nginx, nginx trả thẳng `_gzip` cho Cloudflare, không phải nén lại mỗi lượt. Trên đĩa có 2 file mỗi URL, nhưng **S3 chỉ nhận `.html`**, vì Cloudflare tự nén response của Worker.
+- **Các bước chuyển production** (chỉ làm sau khi xong sticky, preload LCP, wpDataTables, và chủ site duyệt):
+  1. Deploy theme tt-core, Generate cho cả 2 theme. Kiểm tra HTML render desktop và mobile chỉ còn lệch các giá trị ngẫu nhiên.
+  2. Tắt cache mobile riêng trên **cả blog vi và en cùng lúc**: `cache_mobile` = 0, `do_caching_mobile_files` = 0.
+  3. Tạo lại `wp-rocket-config/*.php` và `advanced-cache.php`. File `advanced-cache.php` **dùng chung cho cả mạng multisite**, nên lệch thiết lập giữa 2 blog sẽ làm sai (đã gặp trên php81).
+  4. Xóa file mobile cũ trên đĩa (`index-mobile-*` và `.mobile-active`) theo lô, ở mức ưu tiên thấp. Còn `.mobile-active` thì rocket-nginx vẫn bỏ qua thư mục đó. Không cần xóa toàn bộ cache: bản desktop hiện có vẫn dùng được cho mobile, **nếu nó đã được render bằng theme tt-core**. Vì vậy chỉ xóa sau khi các URL đã được renew bằng theme mới, hoặc renew lại toàn bộ.
+  5. Worker: thôi chọn key theo thiết bị. Trong giai đoạn chuyển tiếp, uploader dùng `-mobile-copy` để ghi cùng nội dung lên cả key mobile.
+
 ## 5c. Đổi version CSS/JS: sửa HTML cache + purge Cloudflare
 
 Chủ site (27/11): sửa `?ver=` ngay trong HTML cache vẫn cần thiết, vì **có hiệu lực ngay**, kể cả với khách đã có CSS/JS cũ trong cache trình duyệt (`max-age=31536000, immutable`). Purge Cloudflare dùng **kết hợp** với cách này.
