@@ -650,11 +650,12 @@ function tt_core_rollback( $theme = null ) {
 		$all[ $theme ]['modules']   = array(); // không biết chính xác: dashboard sẽ báo cần build
 		$all[ $theme ]['ver']       = $m[1];
 		$all[ $theme ]['reason']    = 'rollback';
+		$all[ $theme ]['by']        = get_current_user_id() ? wp_get_current_user()->user_login : ( defined( 'WP_CLI' ) ? 'wp-cli' : 'system' );
 		$all[ $theme ]['signature'] = ''; // buộc dashboard báo "cần build"
 		$all[ $theme ]['history'][] = $m[1];
 		update_site_option( 'tt_core_builds', $all );
 	}
-	return array( 'ok' => true, 'ver' => $m[1] );
+	return array( 'ok' => true, 'ver' => $m[1], 'size' => strlen( $code ), 'msg' => 'Đã quay về bản build trước.' );
 }
 
 /* =========================================================================
@@ -772,7 +773,7 @@ function tt_core_admin_page() {
 		printf(
 			'<p>ver <code>%s</code> · %s · bởi %s (%s) · %s byte (gốc %s)%s%s</p>',
 			esc_html( $b['ver'] ), esc_html( $b['built'] ), esc_html( $b['by'] ), esc_html( $b['reason'] ),
-			number_format_i18n( $b['size'] ), number_format_i18n( $b['size_raw'] ),
+			number_format_i18n( $b['size'] ), $b['size_raw'] ? number_format_i18n( $b['size_raw'] ) : '?',
 			$b['minified'] ? ' · đã minify' : ' · <strong>chưa minify</strong>',
 			$b['checked'] ? ' · đã kiểm cú pháp' : ' · <strong>chưa kiểm cú pháp</strong>'
 		);
@@ -887,7 +888,9 @@ if ( defined( 'WP_CLI' ) && WP_CLI ) {
 			WP_CLI::success( sprintf(
 				'ver %s%s',
 				isset( $r['ver'] ) ? $r['ver'] : '?',
-				isset( $r['size'] ) ? sprintf( ', %d byte (gốc %d), minified=%d, %d module', $r['size'], $r['size_raw'], $r['minified'], count( $r['modules'] ) ) : ''
+				isset( $r['size_raw'], $r['modules'] )
+					? sprintf( ', %d byte (gốc %d), minified=%d, %d module', $r['size'], $r['size_raw'], $r['minified'], count( $r['modules'] ) )
+					: ( isset( $r['msg'] ) ? ' - ' . $r['msg'] : '' )
 			) );
 		}
 	}

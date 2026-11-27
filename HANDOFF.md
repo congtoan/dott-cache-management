@@ -65,7 +65,7 @@ Header S3 phải giữ khi upload: `ContentType: text/html`, `CacheControl: publ
 - `node theme/tools/verify-parity.js`: module ghép lại **khớp JS cũ** theo từng thiết bị. Chỉ lệch 2 dòng có chủ đích ở theme vi (`xemthem`, `topOffset`). Chạy thử desktop, mobile và iPad đều đạt.
 - **Chưa làm:**
   - `engine/vendor/` đã có: Peast v.1.18.2, minify 1.3.76, path-converter 1.1.3.
-  - **Đã test trên php81.congtoan.net** (site 3 `/tttest/` và site 4 `/tttest-en/`): build, minify, desktop/mobile, lỗi cú pháp, rollback, đường lui đều đạt. Chi tiết ở design-tt-core mục 11b. Chưa bấm thử dashboard trên trình duyệt (cần đăng nhập).
+  - **Đã test trên php81.congtoan.net** (site 3 `/tttest/` và site 4 `/tttest-en/`): build, minify, desktop/mobile, lỗi cú pháp, rollback, đường lui đều đạt. Dashboard trên trình duyệt cũng đã thử: Kiểm tra cú pháp, Lưu và Generate, Quay về bản trước đều đạt. Chi tiết ở design-tt-core mục 11b.
 - Để sau (chủ site đã chốt): sticky sidebar, preload LCP trang chủ, wpDataTables.
 
 ## 5. Việc tiếp theo (chủ site chọn)

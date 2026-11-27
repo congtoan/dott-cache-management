@@ -249,12 +249,13 @@ Kiểm tra tương đương bằng `theme/tools/verify-parity.js`: ghép lại m
 | Module lỗi cú pháp | ✅ build dừng: `901-bad-demo.js: lỗi cú pháp dòng 2 cột 6`, `core.js` giữ nguyên bản cũ |
 | `wp tt-core rollback` | ✅ quay về `core.prev.js`, dashboard báo cần build |
 | Đường lui khi chưa có bản build | ✅ desktop nạp `thongthai-desktop.js`, mobile nạp `thongthai-mobile.js` (cách cũ). Generate xong thì chuyển sang `core.js` |
-| Trang Giao diện → TT Core (render qua WP-CLI dưới quyền super admin) | ✅ hiện bản build, thư viện, bảng 18 module, 4 nút, có nonce. **Chưa bấm thử các nút trên trình duyệt** (cần chủ site đăng nhập) |
+| Trang Giao diện → TT Core trên trình duyệt (chủ site đăng nhập, Claude bấm thử ở `/tttest/`) | ✅ **Kiểm tra cú pháp**: báo ver, không ghi file. ✅ **Lưu và Generate** sau khi tắt `call-chat` và đổi `iframe-touch` sang desktop: ra ver mới `85f37cbed7` (48.101 byte). Frontend mobile không còn 2 module đó, 0 lỗi. ✅ **Quay về bản trước**: về `6ed98f93d4`, trang báo "có thay đổi chưa build". ✅ Trả thiết lập về mặc định rồi Generate: đúng ver ban đầu `6ed98f93d4` |
 
 **Lỗi tìm thấy và đã sửa:**
 1. `wp tt-core` không đăng ký được, vì class nằm trong khối `if` được khai báo sau `add_command`.
 2. Rollback không cập nhật kích thước và thời điểm build.
 3. tar tạo từ Windows làm file mang quyền 666/777. Đã thêm bước `chmod` vào hướng dẫn deploy.
+4. Sau khi rollback, dashboard hiện "0 byte", "gốc 0" và người thực hiện cũ. Ngoài ra, lúc sửa lỗi này, kết quả rollback mới làm phần báo cáo của `wp tt-core rollback` bị lỗi PHP fatal (chỉ ở bước in kết quả, rollback vẫn chạy xong). Đã sửa cả hai và test lại.
 
 **Còn lại trên php81** (dọn khi test xong): site 3, site 4, thư mục theme `generatepress_child`, `generatepress_en`, và `wp-content/uploads/tt-core/`.
 
