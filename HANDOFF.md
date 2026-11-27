@@ -1,6 +1,6 @@
 # HANDOFF – Cache System v2 (cập nhật 2026-11-27 tối)
 
-> Điểm bắt đầu cho hội thoại mới. Đọc file này, rồi tới [docs/design-server-only.md](docs/design-server-only.md) và [docs/rollout-log.md](docs/rollout-log.md).
+> Điểm bắt đầu cho hội thoại mới. Đọc file này, rồi tới [docs/HISTORY.md](docs/HISTORY.md) (lịch sử, các tag, những điều từng hiểu sai), [docs/design-server-only.md](docs/design-server-only.md) và [docs/rollout-log.md](docs/rollout-log.md).
 > Mọi thứ cũ hơn (pipeline Python, PC) đã chuyển vào `legacy/`. Chỉ xem lại khi cần tham khảo logic.
 
 ## 1. Bối cảnh trong 1 phút

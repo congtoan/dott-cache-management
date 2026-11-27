@@ -1,32 +1,68 @@
-# Cache System v2 – diaocthongthai.com
+# dott-cache-management – Cache HTML cho diaocthongthai.com
 
-Hệ thống cache HTML mới cho diaocthongthai.com.
-- **VPS chính:** WP Rocket render và ghi cache, nginx phục vụ khách.
-- **VPS phụ `claude-control`:** một service **Go** lo hàng đợi, upload S3 Chicago, ghi Cloudflare KV, đối soát và báo Telegram.
+Hệ thống cache HTML (WP Rocket) cho diaocthongthai.com, chạy trên 2 máy:
 
-> **Hội thoại mới: đọc [HANDOFF.md](HANDOFF.md) trước.**
+- **VPS chính** (45.77.32.177): WordPress multisite render trang, WP Rocket ghi file cache, nginx phục vụ khách.
+- **VPS phụ `claude-control`** (139.180.158.221): service **Go `dott-cache`** làm các việc nặng:
+  - hàng đợi và lấy HTML qua HTTP;
+  - upload lên **S3 nhiều đích** qua pool kết nối;
+  - Cloudflare KV, đối soát S3 ↔ KV ↔ URL thật, báo Telegram.
 
-Repo: `congtoan/dott-cache-management` (private). Thư mục này là **git worktree, nhánh `v2`**. Nhánh `main` (code Python cũ) nằm ở `D:\Claude\2026-11-25 Cache Management`; tag `v0-legacy` đánh dấu bản cũ.
+Cloudflare Worker phục vụ HTML từ S3 cho khách ở xa, khách gần đi thẳng vào origin.
+
+> **Bắt đầu ở đâu:**
+> 1. [HANDOFF.md](HANDOFF.md): trạng thái hiện tại, việc tiếp theo, quy tắc an toàn.
+> 2. [docs/HISTORY.md](docs/HISTORY.md): lịch sử phát triển, vì sao đổi hướng, những điều từng hiểu sai.
+> 3. [docs/design-server-only.md](docs/design-server-only.md): thiết kế v2.
+> 4. [docs/rollout-log.md](docs/rollout-log.md): nhật ký từng giai đoạn.
+
+## Nhánh và tag
+| | |
+|---|---|
+| `v2` (nhánh này) | Hệ thống mới. Mọi công việc mới làm ở đây |
+| `main` | Pipeline Python cũ (v0), **vẫn đang chạy cron trên production**. Sẽ được thay khi `v2` lên `v2.0.0` |
+| tag `v0-legacy`, `v1-design`, `v2-phase1`, `v2-handoff-1`, `v2-prototypes-2026-11-27` | Các mốc, giải thích ở docs/HISTORY.md |
+
+Repo **private**. Trên PC, nhánh `v2` là git worktree tại `D:\Claude\2026-11-27 Cache System v2`, còn `main` ở `D:\Claude\2026-11-25 Cache Management`.
+
+## Trạng thái (2026-11-28)
+- Thiết kế, đo đạc và **prototype** đã xong:
+  - Go uploader;
+  - prefork ghi cache;
+  - mu-plugin một bản HTML;
+  - tt-core;
+  - rocket-nginx.
+- Tất cả prototype mới test trên **php81.congtoan.net** với bucket test.
+- **Production vẫn chạy pipeline cũ.** Chưa có service `dott-cache` chạy nền.
+- Việc tiếp theo: service có hàng đợi (HANDOFF mục 5).
 
 ## Cấu trúc
 ```
-HANDOFF.md        ← trạng thái hiện tại, việc tiếp theo, quy tắc (đọc đầu tiên)
-CLAUDE.md         ← hướng dẫn cho Claude Code khi mở thư mục này
-vps.py            ← lối tắt: python vps.py run|ls|cat|get|put|sql|info  (SSH vào VPS chính)
-secrets.json      ← S3 / Cloudflare / MySQL / WP REST (gitignored, KHÔNG commit)
-.claude/skills/
-  vps-diaocthongthai/   ← skill VPS chính (gitignored: có mật khẩu)
-  vps-claude-control/   ← skill VPS phụ (bản gốc: /root/work/skills/vps-claude-control/ trên VPS phụ)
+HANDOFF.md, CLAUDE.md   ← đọc đầu tiên / hướng dẫn cho Claude Code
+cmd/dott-cache/         ← Go: CLI/service (hiện có lệnh `upload`, prototype)
+internal/origin/        ← Go: gọi origin với SPKI pin
+internal/s3/            ← Go: S3 SigV4, chỉ dùng stdlib, pool nhiều đích
+go.mod
+wp/mu-plugins/          ← mu-plugin WordPress (dott-single-cache.php; sắp có dott-cache.php: sự kiện + REST)
+deploy/nginx/           ← rocket-page-cache.conf (rocket-nginx)
+theme/                  ← tt-core: engine build JS, module vi/en, functions.php mới (xem theme/README.md)
+tools/prefork/          ← render hàng loạt bằng fork, ghi cache WP Rocket thật
+tools/lab-2026-11-27/   ← script đo/thử dùng cho findings (chỉ đọc)
 docs/
-  design-server-only.md            ⭐ thiết kế v2 (2 máy, Go), lộ trình giai đoạn 0–8
-  rollout-log.md                   ⭐ nhật ký từng giai đoạn: đã làm gì, số đo, việc còn lại
-  findings-php-render-2026-11-27.md  đo PHP render, prefork, test nén Cloudflare, nhận định ý tưởng "Go trung gian"
-  batch-render-wp-rocket.md        tài liệu đề xuất prefork (từ một hội thoại Claude khác)
-  findings-2026-11-25.md           danh sách lỗi F1–F17 của pipeline cũ
-  cloudflare.md                    token, KV REST API, Worker
-  TODO_VPS.md                      việc tồn đọng của VPS chính (bản sao; bản gốc ở D:\Claude\2026-11-25 Ket Noi VPS)
-tools/lab-2026-11-27/   ← script đo/thử (chỉ đọc) đã dùng cho findings
-legacy/                 ← tool Python cũ (server/, pc/) + docs cũ, chỉ để tham khảo khi viết bản Go
-data/                   ← dữ liệu cục bộ (gitignored)
+  HISTORY.md                         lịch sử phát triển
+  design-server-only.md              ⭐ thiết kế v2 (mục 5b–5c: một bản HTML, nhiều đích S3, đổi version CSS/JS)
+  design-tt-core.md                  thiết kế tt-core
+  rollout-log.md                     ⭐ nhật ký giai đoạn và số đo
+  findings-php-render-2026-11-27.md  đo PHP render, prefork, nén Cloudflare
+  findings-2026-11-25.md             lỗi F1–F17 của pipeline cũ
+  batch-render-wp-rocket.md          đề xuất prefork ban đầu
+  cloudflare.md                      token, KV REST API, Worker
+  TODO_VPS.md                        việc tồn đọng VPS chính (bản sao)
+legacy/                 ← tool Python cũ (server/, pc/) + docs cũ, chỉ để tham khảo
+vps.py                  ← lối tắt SSH vào VPS chính (cần skill vps-diaocthongthai, gitignored)
+secrets.example.json    ← mẫu; secrets.json thật bị gitignore
 ```
-Code Go sẽ nằm ở `cmd/`, `internal/`, `wp/`, `deploy/` (design mục 13). Hiện chưa có.
+
+## Bí mật
+`secrets.json`, `credentials.json` và `.claude/skills/vps-diaocthongthai/` đều bị gitignore, **không bao giờ commit**.
+Key S3 của service nằm ở `/etc/dott-cache/s3.env` trên VPS phụ.
