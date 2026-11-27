@@ -19,13 +19,8 @@ Thiết kế: [docs/design-tt-core.md](../docs/design-tt-core.md). Trạng thái
 
 **Không chạy lại** `split-legacy.js` sau khi đã sửa module: nó tạo lại module từ bản chụp cũ.
 
-## Thư viện vendor (cần chủ site đồng ý tải)
-Đặt vào `engine/vendor/`:
-```
-vendor/peast/lib/Peast/...                     mck89/peast (BSD-3), kiểm cú pháp JS bằng PHP
-vendor/matthiasmullie/minify/src/...           matthiasmullie/minify (MIT)
-vendor/matthiasmullie/path-converter/src/...   matthiasmullie/path-converter (MIT, minify cần)
-```
+## Thư viện vendor
+Đã có trong `engine/vendor/`: Peast (kiểm cú pháp), matthiasmullie/minify và path-converter. Phiên bản và SHA-256 xem [engine/vendor/README.md](engine/vendor/README.md).
 Thiếu thư viện thì build vẫn chạy, nhưng không kiểm cú pháp và không minify (dashboard báo).
 
 ## Deploy (khi được duyệt, từng bước)

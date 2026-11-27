@@ -166,7 +166,7 @@ Node trên VPS chính (`/usr/bin/node` v10.19, gói apt của Ubuntu 20.04, khô
 - `matthiasmullie/minify` và `matthiasmullie/path-converter` (MIT).
 - `mck89/peast` (BSD-3).
 
-Cả hai chưa có trong repo. Cần chủ site đồng ý tải về, xem `theme/README.md`. Thiếu thư viện thì build vẫn chạy nhưng không kiểm tra cú pháp và không minify, và dashboard hiện cảnh báo.
+Đã tải ngày 27/11 (chủ site đồng ý): Peast `v.1.18.2`, minify `1.3.76`, path-converter `1.1.3`. Phiên bản và SHA-256 ghi trong `theme/engine/vendor/README.md`. Thiếu thư viện thì build vẫn chạy nhưng không kiểm tra cú pháp và không minify, và dashboard hiện cảnh báo.
 
 ## 7. Enqueue và đường lui
 - Có bản build: `wp_enqueue_script( 'tt-core', <theme>/tt-core/core.js, [], <ver>, true )`. HTML chỉ có **một thẻ** `<script id="tt-core-js">`.
