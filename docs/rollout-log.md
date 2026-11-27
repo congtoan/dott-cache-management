@@ -197,5 +197,49 @@ Mục đích: mô phỏng diaocthongthai.com để test tt-core, cache một b�
   - Plugin sticky 3.2.0 đưa module vào tt-core bằng action `tt_core_modules` (code đưa thẳng vào lúc build). Vì vậy `uploads/tt-core/<theme>/modules/` trống là đúng.
   - `core.js` của cả vi (`50d59ad81d`) và en đều có module `ct-multi-sticky-sidebar`.
 
+### Tool renew: 1 URL và danh sách URL (28/11, php81 + bucket test)
+- **Lệnh:** `dott-cache renew -config /etc/dott-cache/upload-test.json -url <URL>` hoặc `-paths list.txt`. Code ở `cmd/dott-cache/renew.go`.
+- **Các bước:**
+  1. Xóa object cũ trên mọi đích S3 (cả key `index-https.html` và `index-mobile-https.html`). Bỏ qua bước này bằng `-keep-s3`.
+  2. Gửi danh sách path qua `ssh main` tới script bọc `/root/dott-renew/renew.sh` (nguồn `tools/prefork/renew.sh`). Script này:
+     - lọc path hợp lệ;
+     - xóa file cache cũ trên đĩa;
+     - chia path theo blog (khớp tiền tố dài nhất trong `wp site list`);
+     - chạy prefork mỗi blog một lần, có `nice`/`ionice` và `flock`;
+     - trả kết quả dạng `R {json}`, kết thúc bằng `DONE`.
+  3. Path nào prefork báo ok thì lấy HTML qua HTTP (nginx trả file mới, HIT) và upload lên các đích.
+- Script bọc đặt trong `/root` (root, 700), **không** đặt trong thư mục của user site. Lý do: root chạy script này, nên nếu user site sửa được file thì sẽ thành leo quyền.
+- **Kết quả:**
+
+| Test | Kết quả |
+|---|---|
+| 1 URL (`/tttest/thanh-pho-huntington-bang-west-virginia/`) | 2,6 s tổng: xóa S3 0,7 s, prefork 1,1 s (boot 450 ms + 80 ms), lấy HTML và upload 0,7 s |
+| 306 dòng (250 vi, 50 en, `/`, `/en/`, 4 dòng lỗi) | 60,6 s tổng: xóa S3 17,5 s, prefork 30,5 s (vi 12,1 URL/s, en 13,6 URL/s), upload 12,6 s. **300/303 ok.** Load VPS chính max 0,96, trung bình 0,47 |
+
+- **Các dòng lỗi được báo đúng:**
+  - Bị bỏ ngay ở VPS phụ: host khác, URL ghép hỏng (`https://hosthttps://host/...`), path có `..`.
+  - Báo lỗi sau prefork:
+    - 404 cho path không tồn tại;
+    - "WP Rocket không ghi file cache" cho `/` và `/en/` (2 blog này không bật WP Rocket).
+  - Lệnh trả exit 1 và in danh sách path chưa xong.
+- **Lỗi đã sửa trong lúc test:**
+  - Lần chạy đầu, 250 URL ghép hỏng bị **bỏ qua mà không báo lỗi**.
+    - Nguyên nhân: Go cắt sai thành `//php81.../`, sau đó script bọc không xếp được path này vào blog nào.
+    - Sửa: Go kiểm tra host và dạng path (`checkLine`). Script bọc từ chối `//`, và báo lỗi mọi path không có kết quả.
+  - `https://example.com/...` từng bị cắt thành path của php81. Bây giờ bị từ chối.
+- **Lỗi font chữ trên S3** (`congtoanphp/_cache_html/tttest/thanh-pho-huntington-bang-west-virginia/`):
+  - Object được upload từ trước khi đặt `WP_DEBUG_DISPLAY` = false, nên có PHP Notice in trước `<!DOCTYPE>`.
+  - Trình duyệt vì vậy chạy quirks mode, và `<meta charset>` nằm ở byte 2010, quá 1024 byte đầu, nên trình duyệt đoán sai bảng mã.
+  - Header S3 cũng chỉ có `text/html`, không có charset.
+  - **Sửa:**
+    - mặc định `Content-Type: text/html; charset=utf-8`;
+    - `origin.validate` từ chối HTML không bắt đầu bằng `<!DOCTYPE` hoặc có `<b>Notice</b>`/`Warning`/`Fatal error`;
+    - đã renew trang đó.
+  - **Còn lại:** object test cũ khác (upload trước 22:4x ngày 27/11) có thể cũng dính Notice. Chạy `renew` cho cả 1.024 URL nếu cần dùng lại.
+- **Ghi chú hiệu suất:**
+  - Bước xóa S3 chiếm 30% thời gian, vì mỗi URL cần 4 lệnh DELETE.
+  - Hướng cải thiện: dùng `DeleteObjects` (tối đa 1000 key mỗi request), hoặc dùng `-keep-s3`, vì PUT vẫn ghi đè.
+- **Chưa kiểm chứng:** prefork ghi đè lên file cache **đang có**. Script bọc luôn xóa file trước, nên trường hợp này chưa xảy ra.
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.

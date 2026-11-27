@@ -43,14 +43,14 @@ Repo **private**. Trên PC, nhánh `v2` là git worktree tại `D:\Claude\2026-1
 ## Cấu trúc
 ```
 HANDOFF.md, CLAUDE.md   ← đọc đầu tiên / hướng dẫn cho Claude Code
-cmd/dott-cache/         ← Go: CLI/service (hiện có lệnh `upload`, prototype)
+cmd/dott-cache/         ← Go: CLI/service (prototype: `upload`, `delete`, `renew`)
 internal/origin/        ← Go: gọi origin với SPKI pin
 internal/s3/            ← Go: S3 SigV4, chỉ dùng stdlib, pool nhiều đích
 go.mod
 wp/mu-plugins/          ← mu-plugin WordPress (dott-single-cache.php; sắp có dott-cache.php: sự kiện + REST)
 deploy/nginx/           ← rocket-page-cache.conf (rocket-nginx)
 theme/                  ← tt-core: engine build JS, module vi/en, functions.php mới (xem theme/README.md)
-tools/prefork/          ← render hàng loạt bằng fork, ghi cache WP Rocket thật
+tools/prefork/          ← render hàng loạt bằng fork, ghi cache WP Rocket thật; renew.sh: script bọc cho `dott-cache renew`
 tools/lab-2026-11-27/   ← script đo/thử dùng cho findings (chỉ đọc)
 docs/
   SUMMARY-2026-11-27.md              ⭐ tổng kết đợt prototype, số đo, việc tiếp theo

@@ -144,6 +144,18 @@ func validate(b []byte) error {
 	if !bytes.Contains(tailOf(b, 400), []byte("</html>")) {
 		return errors.New("thiếu </html>")
 	}
+	// Trang phải bắt đầu bằng <!DOCTYPE. Nếu PHP in Notice/Warning trước nó (đã gặp trên php81
+	// 27/11, trước khi đặt WP_DEBUG_DISPLAY = false), trình duyệt rơi vào quirks mode và thẻ
+	// <meta charset> bị đẩy quá 1024 byte đầu, nên tiếng Việt hiện sai font chữ.
+	head := bytes.TrimLeft(b[:min(len(b), 4096)], " \t\r\n\xef\xbb\xbf")
+	if !bytes.HasPrefix(bytes.ToLower(head[:min(len(head), 9)]), []byte("<!doctype")) {
+		return errors.New("HTML không bắt đầu bằng <!DOCTYPE (có output lạ trước, ví dụ PHP Notice)")
+	}
+	for _, s := range []string{"<b>Notice</b>:", "<b>Warning</b>:", "<b>Deprecated</b>:", "<b>Fatal error</b>:"} {
+		if bytes.Contains(head, []byte(s)) {
+			return fmt.Errorf("HTML có lỗi PHP %q", s)
+		}
+	}
 	return nil
 }
 

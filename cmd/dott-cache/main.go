@@ -1,9 +1,10 @@
 // dott-cache: hệ thống cache v2 (chạy trên VPS phụ).
 //
-// Bản thử (27/11): chỉ có lệnh "upload".
+// Bản thử (27–28/11): các lệnh upload, delete, renew (renew.go).
 //
 //	dott-cache upload -config /etc/dott-cache/upload-test.json -paths paths.txt [-limit N] [-mobile-copy] [-log out.jsonl]
 //	dott-cache delete -config ... -paths paths.txt      # xóa object đã upload (dọn bucket test)
+//	dott-cache renew  -config ... -url URL | -paths list.txt   # xóa cache cũ (S3 + đĩa), prefork, upload
 //
 // Luồng upload: đọc danh sách path → pool lấy HTML từ origin (gọi thẳng IP, nhận file cache
 // nguyên văn) → mỗi trang được đẩy song song lên MỌI đích S3, mỗi đích một pool riêng.
@@ -14,6 +15,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -33,6 +35,13 @@ type Config struct {
 	Targets []s3.Target       `json:"targets"`
 	S3Env   string            `json:"s3_env"`
 	Headers map[string]string `json:"headers"`
+	Renew   RenewConfig       `json:"renew"`
+}
+
+// RenewConfig: cách gọi prefork trên VPS chính.
+type RenewConfig struct {
+	SSHHost string `json:"ssh_host"` // alias trong /root/.ssh/config, vd "main"
+	Command string `json:"command"`  // vd "bash /home/php81conZSI/prefork/renew.sh" (đọc path từ stdin)
 }
 
 func main() {
@@ -44,13 +53,18 @@ func main() {
 		cmdUpload(os.Args[2:], false)
 	case "delete":
 		cmdUpload(os.Args[2:], true)
+	case "renew":
+		cmdRenew(os.Args[2:])
 	default:
 		usage()
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "dùng: dott-cache upload|delete -config file.json -paths paths.txt [-limit N] [-mobile-copy] [-log out.jsonl]")
+	fmt.Fprintln(os.Stderr, `dùng:
+  dott-cache upload -config file.json -paths paths.txt [-limit N] [-mobile-copy] [-log out.jsonl]
+  dott-cache delete -config file.json -paths paths.txt
+  dott-cache renew  -config file.json (-url URL | -paths paths.txt) [-limit N] [-keep-s3] [-log out.jsonl]`)
 	os.Exit(2)
 }
 
@@ -79,7 +93,9 @@ func loadEnv(p string) map[string]string {
 	return m
 }
 
-func readPaths(p string, limit int) []string {
+// readPaths đọc file danh sách. host khác rỗng: dòng là URL của host khác, hoặc path dạng lạ
+// (bắt đầu bằng "//", có "://" bên trong, có "..") bị bỏ và in cảnh báo, không âm thầm đổi thành path khác.
+func readPaths(p string, limit int, host string) []string {
 	f, err := os.Open(p)
 	if err != nil {
 		die("không mở được %s: %v", p, err)
@@ -93,16 +109,13 @@ func readPaths(p string, limit int) []string {
 		if l == "" || strings.HasPrefix(l, "#") {
 			continue
 		}
-		if i := strings.Index(l, "://"); i >= 0 { // chấp nhận cả URL đầy đủ
-			if j := strings.Index(l[i+3:], "/"); j >= 0 {
-				l = l[i+3+j:]
-			} else {
-				l = "/"
+		if host != "" {
+			if err := checkLine(l, host); err != nil {
+				fmt.Fprintf(os.Stderr, "bỏ dòng %q: %v\n", l, err)
+				continue
 			}
 		}
-		if !strings.HasSuffix(l, "/") {
-			l += "/"
-		}
+		l = normPath(l)
 		if !seen[l] {
 			seen[l] = true
 			out = append(out, l)
@@ -112,6 +125,50 @@ func readPaths(p string, limit int) []string {
 		}
 	}
 	return out
+}
+
+// checkLine: dòng phải là path "/..." hoặc URL http(s)://<host>/..., và path không có dạng lạ.
+func checkLine(l, host string) error {
+	l = strings.TrimSpace(l)
+	if i := strings.Index(l, "://"); i >= 0 {
+		rest := l[i+3:]
+		h, _, _ := strings.Cut(rest, "/")
+		if !strings.EqualFold(h, host) {
+			return fmt.Errorf("không phải host %s", host)
+		}
+		l = strings.TrimPrefix(rest, h)
+	}
+	switch {
+	case !strings.HasPrefix(l, "/") && l != "":
+		return errors.New("không bắt đầu bằng /")
+	case strings.HasPrefix(l, "//"), strings.Contains(l, "://"):
+		return errors.New("path dạng lạ (có // hoặc ://)")
+	case strings.Contains(l, ".."):
+		return errors.New("path có ..")
+	}
+	return nil
+}
+
+// normPath: chấp nhận cả URL đầy đủ, trả về path có "/" cuối, bỏ query string và #fragment.
+func normPath(l string) string {
+	l = strings.TrimSpace(l)
+	if i := strings.Index(l, "://"); i >= 0 {
+		if j := strings.Index(l[i+3:], "/"); j >= 0 {
+			l = l[i+3+j:]
+		} else {
+			l = "/"
+		}
+	}
+	if i := strings.IndexAny(l, "?#"); i >= 0 {
+		l = l[:i]
+	}
+	if !strings.HasPrefix(l, "/") {
+		l = "/" + l
+	}
+	if !strings.HasSuffix(l, "/") {
+		l += "/"
+	}
+	return l
 }
 
 // keyFor: path "/en/about-us/" → "<prefix>en/about-us/index-https.html" (giống tool cũ).
@@ -132,19 +189,9 @@ type result struct {
 	Err      string  `json:"err,omitempty"`
 }
 
-func cmdUpload(args []string, del bool) {
-	fs := flag.NewFlagSet("upload", flag.ExitOnError)
-	cfgPath := fs.String("config", "/etc/dott-cache/upload-test.json", "file cấu hình JSON")
-	pathsFile := fs.String("paths", "", "file danh sách path (mỗi dòng một path hoặc URL)")
-	limit := fs.Int("limit", 0, "chỉ xử lý N path đầu")
-	mobileCopy := fs.Bool("mobile-copy", false, "upload thêm cùng nội dung lên key index-mobile-https.html (giai đoạn chuyển tiếp)")
-	logPath := fs.String("log", "", "ghi kết quả từng bước ra file JSONL")
-	fs.Parse(args)
-	if *pathsFile == "" {
-		usage()
-	}
-
-	raw, err := os.ReadFile(*cfgPath)
+// setup đọc config, key S3 và tạo client cho mọi đích.
+func setup(cfgPath string) (Config, []*s3.Client) {
+	raw, err := os.ReadFile(cfgPath)
 	if err != nil {
 		die("đọc config: %v", err)
 	}
@@ -158,15 +205,9 @@ func cmdUpload(args []string, del bool) {
 		die("thiếu S3_ACCESS_KEY/S3_SECRET_KEY trong %s", cfg.S3Env)
 	}
 	if cfg.Headers == nil {
-		cfg.Headers = map[string]string{"Content-Type": "text/html", "Cache-Control": "public, max-age=31536000", "x-amz-acl": "public-read"}
+		// charset=utf-8: không có thì trình duyệt phải tự đoán bảng mã từ <meta charset>.
+		cfg.Headers = map[string]string{"Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=31536000", "x-amz-acl": "public-read"}
 	}
-
-	paths := readPaths(*pathsFile, *limit)
-	files := []string{"index-https.html"}
-	if *mobileCopy {
-		files = append(files, "index-mobile-https.html")
-	}
-
 	clients := make([]*s3.Client, 0, len(cfg.Targets))
 	for _, t := range cfg.Targets {
 		c, err := s3.New(t, ak, sk)
@@ -175,48 +216,81 @@ func cmdUpload(args []string, del bool) {
 		}
 		clients = append(clients, c)
 	}
+	return cfg, clients
+}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+// collector gom kết quả từ mọi goroutine, ghi JSONL nếu có -log.
+type collector struct {
+	ch   chan result
+	all  []result
+	done chan struct{}
+	f    *os.File
+	w    *bufio.Writer
+}
 
-	results := make(chan result, 256)
-	var logW *bufio.Writer
-	if *logPath != "" {
-		f, err := os.Create(*logPath)
+func newCollector(logPath string) *collector {
+	c := &collector{ch: make(chan result, 256), done: make(chan struct{})}
+	var enc *json.Encoder
+	if logPath != "" {
+		f, err := os.Create(logPath)
 		if err != nil {
 			die("tạo log: %v", err)
 		}
-		defer f.Close()
-		logW = bufio.NewWriter(f)
-		defer logW.Flush()
+		c.f, c.w = f, bufio.NewWriter(f)
+		enc = json.NewEncoder(c.w)
 	}
-	var all []result
-	collected := make(chan struct{})
 	go func() {
-		enc := (*json.Encoder)(nil)
-		if logW != nil {
-			enc = json.NewEncoder(logW)
-		}
-		for r := range results {
-			all = append(all, r)
+		for r := range c.ch {
+			c.all = append(c.all, r)
 			if enc != nil {
 				enc.Encode(r)
 			}
 		}
-		close(collected)
+		close(c.done)
 	}()
+	return c
+}
+
+func (c *collector) finish() []result {
+	close(c.ch)
+	<-c.done
+	if c.w != nil {
+		c.w.Flush()
+		c.f.Close()
+	}
+	return c.all
+}
+
+func cmdUpload(args []string, del bool) {
+	fs := flag.NewFlagSet("upload", flag.ExitOnError)
+	cfgPath := fs.String("config", "/etc/dott-cache/upload-test.json", "file cấu hình JSON")
+	pathsFile := fs.String("paths", "", "file danh sách path (mỗi dòng một path hoặc URL)")
+	limit := fs.Int("limit", 0, "chỉ xử lý N path đầu")
+	mobileCopy := fs.Bool("mobile-copy", false, "upload thêm cùng nội dung lên key index-mobile-https.html (giai đoạn chuyển tiếp)")
+	logPath := fs.String("log", "", "ghi kết quả từng bước ra file JSONL")
+	fs.Parse(args)
+	if *pathsFile == "" {
+		usage()
+	}
+	cfg, clients := setup(*cfgPath)
+	paths := readPaths(*pathsFile, *limit, cfg.Origin.Host)
+	files := []string{"index-https.html"}
+	if *mobileCopy {
+		files = append(files, "index-mobile-https.html")
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	col := newCollector(*logPath)
 
 	start := time.Now()
 	fmt.Printf("%s %d path × %d file × %d đích (%s)\n", map[bool]string{false: "upload", true: "delete"}[del], len(paths), len(files), len(clients), targetsDesc(cfg.Targets))
-
 	if del {
-		runDelete(ctx, paths, files, clients, results)
+		runDelete(ctx, paths, files, clients, col.ch)
 	} else {
-		runUpload(ctx, cfg, paths, files, clients, results)
+		runUpload(ctx, cfg, paths, files, clients, col.ch)
 	}
-	close(results)
-	<-collected
-	summary(all, time.Since(start), cfg.Targets)
+	summary(col.finish(), time.Since(start), cfg.Targets)
 }
 
 func targetsDesc(ts []s3.Target) string {

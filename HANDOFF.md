@@ -87,6 +87,12 @@ Header S3 phải giữ khi upload: `ContentType: text/html`, `CacheControl: publ
   - Chỉ dùng 1 tiến trình con, vì VPS chính có 1 vCPU.
   - Trên production dự kiến chỉ nhanh khoảng 3–5 lần (vì có Redis). **Chưa đo trên production.**
 
+- **Tool renew (28/11)**, chạy trên VPS phụ: `dott-cache renew -url URL` hoặc `-paths list.txt`.
+  - Các bước: xóa object S3 → `ssh main` tới `/root/dott-renew/renew.sh` (xóa file cache cũ, prefork theo blog) → lấy HTML qua HTTP → upload mọi đích.
+  - 1 URL mất 2,6 s. 303 URL mất 60,6 s, 300 ok, 3 lỗi được báo đúng.
+  - Đã sửa lỗi font chữ trên S3: thêm `charset=utf-8` và từ chối HTML có PHP Notice.
+  - Chi tiết: rollout-log.
+
 ## 5. Việc tiếp theo (chủ site chọn)
 1. **Service `dott-cache` có hàng đợi** (SQLite, nhận sự kiện từ mu-plugin trên php81, render bằng HTTP hoặc prefork, upload nhiều đích), test trên php81 với bucket test.
 2. Đo prefork trên production (chỉ đọc, không ghi cache), khi chủ site cho phép.
