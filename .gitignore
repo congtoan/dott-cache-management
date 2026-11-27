@@ -25,3 +25,9 @@ redis_error_pages.txt
 __pycache__/
 *.pyc
 .venv/
+
+# tt-core: goi deploy va file build (server tu tao)
+theme/dist/
+theme/**/core.js
+theme/**/core.prev.js
+theme/**/core.manifest.json

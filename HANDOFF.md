@@ -60,6 +60,14 @@ Header S3 phải giữ khi upload: `ContentType: text/html`, `CacheControl: publ
 - Ý tưởng "Go trung gian trả kết quả có sẵn cho WordPress" **không đáng làm**: chi phí nằm ở PHP nạp 50 plugin, và dữ liệu đã có trong Redis local.
 - Query Monitor đang bật trên production (drop-in `db.php` chạy ở mọi request). Các plugin dev/admin cũng vẫn bật thường trực.
 
+## 4b. tt-core: một file JS cho desktop và mobile (bản nháp 27/11)
+- Thiết kế: [docs/design-tt-core.md](docs/design-tt-core.md). Code: [theme/](theme/) gồm engine, 18 module vi, 8 module en, và `functions.php` mới có đường lui.
+- `node theme/tools/verify-parity.js`: module ghép lại **khớp JS cũ** theo từng thiết bị. Chỉ lệch 2 dòng có chủ đích ở theme vi (`xemthem`, `topOffset`). Chạy thử desktop, mobile và iPad đều đạt.
+- **Chưa làm:**
+  - Chưa có `engine/vendor/` (Peast, minify): cần chủ site đồng ý tải về.
+  - Chưa test PHP builder thật: sẽ test trên **php81.congtoan.net** (multisite), mỗi lần ghi đều hỏi trước.
+- Để sau (chủ site đã chốt): sticky sidebar, preload LCP trang chủ, wpDataTables.
+
 ## 5. Việc tiếp theo (chủ site chọn)
 1. **Đo tác động của Query Monitor và của từng plugin** lên bootstrap (dùng prefork lab, chỉ đo, không tắt plugin thật). Đây là câu hỏi cuối cùng mình vừa hỏi chủ site.
 2. **Giai đoạn 2 của v2:** khung code Go (`cmd/dott-cache`, `internal/...`), SQLite, import `cache_urls.db`, lệnh `status`, test `paths` (so với `kv_key()` trong `legacy/pc/u2_update_db_and_kv_v3.4.py`). Chưa ghi gì lên VPS chính.
