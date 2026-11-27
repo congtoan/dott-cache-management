@@ -1,5 +1,9 @@
 # Secrets - KHONG BAO GIO commit
 secrets.json
+# Skill VPS chinh co mat khau root/MySQL trong SKILL.md + credentials.json (ban goc o D:\Claude\2026-11-25 Ket Noi VPS)
+.claude/skills/vps-diaocthongthai/
+.claude/settings.local.json
+credentials.json
 **/secrets.json
 *.pickle
 .env

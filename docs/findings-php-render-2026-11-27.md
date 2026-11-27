@@ -1,6 +1,6 @@
 # FINDINGS – Hiệu suất render PHP, prefork, nén Cloudflare (2026-11-27)
 
-> Trả lời tài liệu [batch-render-wp-rocket.md](../batch-render-wp-rocket.md) và ý tưởng "trung gian Go trả kết quả có sẵn cho WordPress".
+> Trả lời tài liệu [batch-render-wp-rocket.md](batch-render-wp-rocket.md) và ý tưởng "trung gian Go trả kết quả có sẵn cho WordPress".
 > Tất cả đều đo thật trên production và chỉ đọc. Lúc đo VPS chính đang tải thấp (load 0,3), en-map-of đã chạy xong.
 > Script đo nằm trong [tools/lab-2026-11-27/](../tools/lab-2026-11-27/). Các file tạm trên 2 VPS đã xóa.
 

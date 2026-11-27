@@ -21,7 +21,7 @@ Các quyết định của chủ site (25–27/11):
 - Khi bấm "Clear all cache": mặc định chỉ xóa trên server, **không xóa S3**.
 - `/es/` bỏ qua.
 - **Không** upload HTML lên bucket Singapore.
-- Dùng repo `dott-cache-management`. Code mới nằm ở `D:\Claude\2026-11-26 Cache System NEW - Server only`. Trên server: `/opt/dott-cache` (VPS phụ) và `/root/tool/diaocthongthai.com/cache-system` (phần nhỏ còn lại trên VPS chính, nếu có).
+- Dùng repo `dott-cache-management`. Code mới nằm ở `D:\Claude\2026-11-27 Cache System v2`. Trên server: `/opt/dott-cache` (VPS phụ) và `/root/tool/diaocthongthai.com/cache-system` (phần nhỏ còn lại trên VPS chính, nếu có).
 
 ## 1. Nguyên tắc
 
@@ -151,7 +151,7 @@ remove(path): KV delete → S3 delete 4 file → POST purge → status = 'remove
 
 ## 6. Tự điều tiết theo tải VPS chính
 
-Hàm cũ `check_cpu_usage_and_wait()` ([server/utils.py](../server/utils.py)) dùng `psutil.cpu_percent()`. Hàm này đo CPU của **chính máy chạy tool**, nên chạy trên VPS phụ thì sẽ đo sai máy. Bản Go thay bằng goroutine `throttle`, cứ 5–10 giây đọc một lần và bật/tắt cờ cho render-limiter:
+Hàm cũ `check_cpu_usage_and_wait()` ([legacy/server/utils.py](../legacy/server/utils.py)) dùng `psutil.cpu_percent()`. Hàm này đo CPU của **chính máy chạy tool**, nên chạy trên VPS phụ thì sẽ đo sai máy. Bản Go thay bằng goroutine `throttle`, cứ 5–10 giây đọc một lần và bật/tắt cờ cho render-limiter:
 
 | Tín hiệu | Nguồn | Ngưỡng mặc định |
 |---|---|---|
@@ -311,7 +311,7 @@ dott-cache-management/
 ├── legacy/                         # server/, pc/, tools/ Python cũ (giữ tới khi bỏ hẳn)
 └── docs/
 ```
-- Code mới phát triển ở `D:\Claude\2026-11-26 Cache System NEW - Server only`, cùng repo GitHub `congtoan/dott-cache-management`, theo nhánh `v2`.
+- Code mới phát triển ở `D:\Claude\2026-11-27 Cache System v2`, cùng repo GitHub `congtoan/dott-cache-management`, theo nhánh `v2`.
 - Gắn tag `v0-legacy` trước khi dời code cũ vào `legacy/`.
 
 ## 14. Lộ trình triển khai

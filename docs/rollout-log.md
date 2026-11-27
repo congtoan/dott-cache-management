@@ -10,7 +10,7 @@ Mỗi giai đoạn trong [design-server-only.md](design-server-only.md) mục 14
 - **Repo**
   - Tag `v0-legacy` (commit `701c930`) đánh dấu bộ tool Python cũ.
   - Nhánh `v2` đã push lên `origin`.
-  - Thư mục PC `D:\Claude\2026-11-26 Cache System NEW - Server only` là **git worktree** của repo `dott-cache-management`, theo nhánh `v2`. Thư mục cũ `D:\Claude\2026-11-25 Cache Management` vẫn ở nhánh `main`.
+  - Thư mục PC `D:\Claude\2026-11-26 Cache System NEW - Server only` (từ 27/11 tối đã **chuyển** thành `D:\Claude\2026-11-27 Cache System v2` bằng `git worktree move`) là **git worktree** của repo `dott-cache-management`, theo nhánh `v2`. Thư mục cũ `D:\Claude\2026-11-25 Cache Management` vẫn ở nhánh `main`.
   - `secrets.json` không có trong worktree (được gitignore). v2 không dùng file này.
 - **Go trên VPS phụ**
   - `apt install golang-go` cho **go1.26.8 linux/amd64**, chiếm 77 MB.
