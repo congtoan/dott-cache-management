@@ -1,5 +1,9 @@
 # Cache Management – diaocthongthai.com
 
+> **Hướng mới (từ 2026-11-27): nhánh [`v2`](https://github.com/congtoan/dott-cache-management/tree/v2).** Hệ thống chia 2 máy, service Go chạy trên VPS phụ.
+> Mọi việc mới đều làm ở nhánh `v2`. Đọc `HANDOFF.md` và `docs/HISTORY.md` trên nhánh đó.
+> Nhánh `main` này là **pipeline Python cũ (v0)**, vẫn đang chạy cron trên production (tag `v0-legacy`). Nhánh chỉ giữ để tham khảo và vận hành tạm, không phát triển thêm.
+
 Bộ tool quản lý **cache HTML WP Rocket** của diaocthongthai.com: đồng bộ cache lên **S3 Linode** và danh sách URL hợp lệ lên **Cloudflare KV**.
 
 Thư mục này **thay cho** thư mục cũ `D:\Real\Python\2025-01-18 s3 sync with boto3\2025-09-05_S3_Sync_Object_S3_to_S3_v6\cache-tools-new`. Thư mục cũ vẫn giữ nguyên, không xóa.
