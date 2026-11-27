@@ -27,6 +27,7 @@ Thiếu thư viện thì build vẫn chạy, nhưng không kiểm cú pháp và 
 1. `node theme/tools/package.js`
 2. Backup thư mục theme trên server (`cp -a <theme> <theme>.bak-$(date +%F)`).
 3. Chép `dist/<theme>/*` đè lên thư mục theme. Chỉ thêm `tt-core/` và thay `functions.php`, file cũ giữ nguyên.
+   Sau đó sửa chủ sở hữu và quyền: `chown -R <user>:<user> <theme>`, `find <theme>/tt-core -type d -exec chmod 755 {} +`, `find <theme>/tt-core -type f -exec chmod 644 {} +`. Lý do: tar tạo từ Windows mang quyền 666/777 (đã gặp khi test trên php81).
 4. Mở **Giao diện → TT Core**, bấm **Generate**. Trước khi Generate, site vẫn chạy JS cũ (đường lui).
 5. Kiểm tra: `<url>?djtprobe=N`, `?tt_device=mobile`, `?tt_device=desktop`. Trong console gõ `TT.list()`.
 

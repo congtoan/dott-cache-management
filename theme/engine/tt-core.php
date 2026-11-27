@@ -642,6 +642,12 @@ function tt_core_rollback( $theme = null ) {
 	}
 	$all = tt_core_builds();
 	if ( isset( $all[ $theme ] ) ) {
+		if ( preg_match( '/\| ver [0-9a-f]{10} \| (\S+) \| (\d+) module/', $code, $hm ) ) {
+			$all[ $theme ]['built'] = $hm[1];
+		}
+		$all[ $theme ]['size']      = strlen( $code );
+		$all[ $theme ]['size_raw']  = 0;  // không biết, bản build trước không lưu
+		$all[ $theme ]['modules']   = array(); // không biết chính xác: dashboard sẽ báo cần build
 		$all[ $theme ]['ver']       = $m[1];
 		$all[ $theme ]['reason']    = 'rollback';
 		$all[ $theme ]['signature'] = ''; // buộc dashboard báo "cần build"
@@ -827,8 +833,7 @@ function tt_core_admin_page() {
  * ====================================================================== */
 
 if ( defined( 'WP_CLI' ) && WP_CLI ) {
-	WP_CLI::add_command( 'tt-core', 'TT_Core_CLI' );
-
+	// Class trong khối if chỉ tồn tại sau khi khai báo xong, nên add_command đặt ở cuối khối.
 	class TT_Core_CLI {
 		/** Trạng thái bản build và module. */
 		public function status() {
@@ -886,4 +891,6 @@ if ( defined( 'WP_CLI' ) && WP_CLI ) {
 			) );
 		}
 	}
+
+	WP_CLI::add_command( 'tt-core', 'TT_Core_CLI' );
 }

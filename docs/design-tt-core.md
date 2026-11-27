@@ -229,6 +229,35 @@ Kiểm tra tương đương bằng `theme/tools/verify-parity.js`: ghép lại m
 4. Đưa lên diaocthongthai.com: deploy theme, Generate, kiểm tra vài URL bằng `?djtprobe=` (không qua cache). Lúc này **vẫn còn 2 bản cache** desktop và mobile, nhưng nội dung đã gần như giống nhau.
 5. Sau khi chạy ổn (xử lý sticky sidebar, preload LCP, wpDataTables), tắt "Separate cache for mobile", sửa Worker và v2 chỉ render 1 bản.
 
+## 11b. Kết quả test trên php81.congtoan.net (2026-11-27, chủ site đồng ý)
+
+**Đã thiết lập để test:**
+- Chép `generatepress_child` và `generatepress_en` từ diaocthongthai.com (production chỉ đọc), rồi phủ `dist/` lên.
+- Tạo 2 site con: **site 3** `/tttest/` (theme vi) và **site 4** `/tttest-en/` (theme en). Site 1 và site 2 cùng theme `generatepress-child` của php81 không bị đụng tới.
+
+| Phép thử | Kết quả |
+|---|---|
+| `wp tt-core check`, rồi `build` | ✅ vi: 18 module, gốc 90.355 byte, **minify 50.910 byte** (gzip 14,7 KB, brotli 13,1 KB). en: 8 module, gốc 37.085 byte, minify 19.562 byte (gzip 6,9 KB). Mỗi lệnh mất khoảng 0,4 giây và 115 MB RAM, tính cả bootstrap WP-CLI |
+| `core.js` minify, kiểm bằng `node --check` (Node 22) trên PC | ✅ cả 2 file |
+| Chuỗi nhạy cảm sau minify: template literal (XMP, CSS call-chat), regex, link app Shopee, `onclick` "Bạn đã xem" | ✅ còn nguyên. Chỉ mất 7 template literal nằm trong dòng `//-console.log`, tức comment, nên mất là đúng |
+| Build lại khi không có thay đổi | ✅ cùng `ver` (`ver` tính theo nội dung) |
+| Trình duyệt desktop, `?tt_device=desktop` | ✅ vi: 17 module chạy, `aff-redirect-mobile` bị bỏ qua, 0 lỗi. en: 8/8 |
+| Trình duyệt mobile (Android, có UA-CH), `?tt_device=auto` | ✅ vi: 12 module chạy, 6 module desktop bị bỏ qua, `<html class="tt-mobile">`, 0 lỗi. en: 6 chạy, 2 bỏ qua |
+| HTML chỉ có một script của theme | ✅ `tt-core/core.js?ver=...`, không còn `thongthai-*.js` |
+| HTML desktop và HTML mobile (curl với 2 UA) | ✅ phần theme giống hệt. Còn lệch: `lss-3.js` của **ct-multi-sticky-sidebar** (đã biết, để sau) và jQuery chỉ nạp ở desktop (do một plugin của php81, production không có chỗ lệch này) |
+| Module trong `uploads/tt-core/<theme>/modules/` (giả lập plugin) | ✅ file vừa ghi chưa tới 10 giây thì build **dừng** và báo. Hết 10 giây thì build có thêm module (19 module, `device=mobile`) |
+| Module lỗi cú pháp | ✅ build dừng: `901-bad-demo.js: lỗi cú pháp dòng 2 cột 6`, `core.js` giữ nguyên bản cũ |
+| `wp tt-core rollback` | ✅ quay về `core.prev.js`, dashboard báo cần build |
+| Đường lui khi chưa có bản build | ✅ desktop nạp `thongthai-desktop.js`, mobile nạp `thongthai-mobile.js` (cách cũ). Generate xong thì chuyển sang `core.js` |
+| Trang Giao diện → TT Core (render qua WP-CLI dưới quyền super admin) | ✅ hiện bản build, thư viện, bảng 18 module, 4 nút, có nonce. **Chưa bấm thử các nút trên trình duyệt** (cần chủ site đăng nhập) |
+
+**Lỗi tìm thấy và đã sửa:**
+1. `wp tt-core` không đăng ký được, vì class nằm trong khối `if` được khai báo sau `add_command`.
+2. Rollback không cập nhật kích thước và thời điểm build.
+3. tar tạo từ Windows làm file mang quyền 666/777. Đã thêm bước `chmod` vào hướng dẫn deploy.
+
+**Còn lại trên php81** (dọn khi test xong): site 3, site 4, thư mục theme `generatepress_child`, `generatepress_en`, và `wp-content/uploads/tt-core/`.
+
 ## 12. Còn mở
 - Bản mobile cũ của Aff Redirect lấy `appUrls[urlIndex]` với `urlIndex` chạy từ 0 tới 3 (tính theo độ dài `webUrls`), trong khi `appUrls` chỉ có 2 link. Vì vậy 2 trên 4 lượt sẽ mở `undefined`. Module mới **giữ nguyên hành vi** này. Muốn sửa thì đổi thành `appUrls[urlIndex % appUrls.length]`, chủ site quyết định.
 - `rightclick-cleanup` hiện chỉ chạy trên desktop, giống code cũ. Có thể cho chạy ở mọi thiết bị vì vô hại.
