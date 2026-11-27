@@ -217,13 +217,19 @@ Như vậy upload hàng loạt 60 nghìn URL (khi đã có cache) khoảng 23 ph
 | Thiết lập WP Rocket | File mỗi URL |
 |---|---|
 | Hiện tại của production: `cache_mobile` = 1, `do_caching_mobile_files` = 1 | `index-https.html`, `index-https.html_gzip`, `index-mobile-https.html`, `index-mobile-https.html_gzip` và file `.mobile-active` trong thư mục |
-| **Tắt "Separate cache for mobile"** (`/tttest/`) | Chỉ còn `index-https.html` + `index-https.html_gzip`. Không còn `.mobile-active`. Mobile và desktop nhận cùng file |
+| **Một bản cache**: `cache_mobile` = 1, `do_caching_mobile_files` = 0, ép bằng mu-plugin (`/tttest/`, `/tttest-en/`) | Chỉ còn `index-https.html` + `index-https.html_gzip`. Không còn `.mobile-active`. Mobile và desktop nhận cùng file; request mobile đầu tiên cũng ghi đúng file này |
+
+**Cách tắt "Separate cache for mobile" trong WP Rocket 3.16** (đọc code 27/11):
+- Giao diện **không có nút tắt**. `cache_mobile` và `do_caching_mobile_files` là trường ẩn, giữ nguyên khi lưu. Khi `cache_mobile` = 0 thì trang thiết lập chỉ hiện gợi ý kèm nút "bật mobile cache".
+- `inc/admin/admin.php`: khi lưu thiết lập, nếu `cache_mobile` = 1 mà `do_caching_mobile_files` = 0 thì WP Rocket **tự bật lại** `do_caching_mobile_files` = 1. Hàm nâng cấp `enable_separate_cache_files_mobile()` cũng bật lại.
+- **Không được đặt `cache_mobile` = 0:** khi đó `Buffer\Tests::can_process_mobile()` trả false với UA mobile, tức khách mobile **không được PHP phục vụ cache** và request mobile **không ghi cache**. Trên php81 lúc đầu vẫn chạy được chỉ vì rocket-nginx trả file trước.
+- **Cách dùng:** mu-plugin `wp/mu-plugins/dott-single-cache.php` dùng filter `pre_update_option_wp_rocket_settings` và `option_wp_rocket_settings` để luôn giữ `cache_mobile` = 1, `do_caching_mobile_files` = 0, dù ghi từ giao diện, nâng cấp, AJAX hay WP-CLI. Đã test trên php81: ghi thử 1/1 thì file cấu hình vẫn ra 1/0. Lưu ý: giá trị thô trong DB có thể vẫn là giá trị cũ, vì giá trị đọc ra đã bị ép nên `update_option` thấy không đổi và không ghi. Mọi chỗ đọc qua `get_option` đều nhận đúng giá trị đã ép.
 
 - `_gzip` do WP Rocket luôn tạo khi PHP có `gzencode`. Không có tùy chọn tắt, chỉ chỉnh được mức nén (filter `rocket_gzencode_level_compression`). **Nên giữ**: khi đã có rocket-nginx, nginx trả thẳng `_gzip` cho Cloudflare, không phải nén lại mỗi lượt. Trên đĩa có 2 file mỗi URL, nhưng **S3 chỉ nhận `.html`**, vì Cloudflare tự nén response của Worker.
 - **Các bước chuyển production** (chỉ làm sau khi xong sticky, preload LCP, wpDataTables, và chủ site duyệt):
   1. Deploy theme tt-core, Generate cho cả 2 theme. Kiểm tra HTML render desktop và mobile chỉ còn lệch các giá trị ngẫu nhiên.
-  2. Tắt cache mobile riêng trên **cả blog vi và en cùng lúc**: `cache_mobile` = 0, `do_caching_mobile_files` = 0.
-  3. Tạo lại `wp-rocket-config/*.php` và `advanced-cache.php`. File `advanced-cache.php` **dùng chung cho cả mạng multisite**, nên lệch thiết lập giữa 2 blog sẽ làm sai (đã gặp trên php81).
+  2. Cài mu-plugin `dott-single-cache.php`. Nó áp dụng cho **cả mạng**, tức blog vi và en cùng lúc.
+  3. Với từng blog, gọi `rocket_generate_config_file()`, rồi gọi `rocket_generate_advanced_cache_file()` một lần. File `advanced-cache.php` **dùng chung cho cả mạng multisite**, nên lệch thiết lập giữa 2 blog sẽ làm sai (đã gặp trên php81).
   4. Xóa file mobile cũ trên đĩa (`index-mobile-*` và `.mobile-active`) theo lô, ở mức ưu tiên thấp. Còn `.mobile-active` thì rocket-nginx vẫn bỏ qua thư mục đó. Không cần xóa toàn bộ cache: bản desktop hiện có vẫn dùng được cho mobile, **nếu nó đã được render bằng theme tt-core**. Vì vậy chỉ xóa sau khi các URL đã được renew bằng theme mới, hoặc renew lại toàn bộ.
   5. Worker: thôi chọn key theo thiết bị. Trong giai đoạn chuyển tiếp, uploader dùng `-mobile-copy` để ghi cùng nội dung lên cả key mobile.
 

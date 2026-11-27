@@ -139,6 +139,14 @@ Mục đích: mô phỏng diaocthongthai.com để test tt-core, cache một b�
 - Đã thử từ VPS phụ bằng `curl --aws-sigv4`: list `congtoanphp` us-ord-1 OK (0,69 s), eu-central-1 OK (0,50 s). Key được đưa vào curl qua file config tạm, không lộ trên `ps`.
 - Claude trên VPS phụ: đã thêm luật cấm `Read(/etc/dott-cache/**)`, `Bash(cat /etc/dott-cache/*)`, `Bash(*/etc/dott-cache/*)` vào `/root/.claude/settings.json` (siết quyền, có backup `.bak-2026-11-27`).
 
+### Một bản cache trong WP Rocket: mu-plugin `dott-single-cache.php` (27/11 khuya, php81)
+- WP Rocket 3.16 không có nút tắt "Separate cache for mobile". Đặt `cache_mobile` = 0 (như đã làm lúc đầu trên `/tttest/`) là **sai**: khách mobile không được PHP phục vụ cache và request mobile không ghi cache. Chi tiết ở design 5b.
+- Đã cài `wp-content/mu-plugins/dott-single-cache.php` trên php81 (áp dụng cả mạng php81). Plugin ép `cache_mobile` = 1, `do_caching_mobile_files` = 0. Đã tạo lại config cho site 3, site 4 và `advanced-cache.php`, rồi xóa cache 2 site test.
+- Test:
+  - Ghi thử `do_caching_mobile_files` = 1 (giả lập lúc lưu giao diện hay nâng cấp): file config vẫn ra `$rocket_cache_mobile = 1; $rocket_do_caching_mobile_files = 0`.
+  - Trang chưa có cache, request **mobile đầu tiên** render (0,9–1,3 s) và ghi `index-https.html` + `_gzip`. Không có file mobile, không có `.mobile-active`. Các request sau, mobile và desktop, đều được nginx HIT trong khoảng 5 ms.
+- **Từ giờ cả `/tttest-en/` cũng là một bản cache.** Đường "tách mobile" không còn site test nào; nếu cần thử lại thì gỡ mu-plugin.
+
 ### Bản thử Go uploader `dott-cache upload` (27/11 khuya)
 - Code: `cmd/dott-cache`, `internal/s3` (tự ký SigV4, chỉ dùng thư viện chuẩn), `internal/origin`. Binary nằm ở `/opt/dott-cache/bin/dott-cache` trên VPS phụ (9,5 MB), build bằng Go 1.26.8 với `GOMEMLIMIT=200MiB`. Chạy bằng `systemd-run -p MemoryMax=150M`.
 - Luồng xử lý: lấy HTML từ origin **một lần** (gọi thẳng IP 45.77.32.177, kiểm tra SPKI pin, không gửi `Accept-Encoding`, phải có `cached@`), rồi đẩy song song lên mọi đích S3. Mỗi đích có pool riêng, PUT có `Content-MD5`, kiểm tra ETag bằng MD5, không gửi `Expect: 100-continue`.
