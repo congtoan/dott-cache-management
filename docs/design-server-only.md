@@ -95,7 +95,7 @@ Các quyết định của chủ site (25–27/11):
 
 Giới hạn trên VPS chính cần biết:
 - nginx `location /`: `limit_req zone=one` **10 request/giây, burst 20**, `limit_conn` **10 kết nối/IP**. Khi vượt ngưỡng nginx trả **403**. Cache system dùng tối đa khoảng 6 kết nối cùng lúc (1–2 render + vài fetch file tĩnh), nên nằm dưới ngưỡng. Code phải coi 403 là tín hiệu "chậm lại", không coi là lỗi URL.
-- fail2ban `nginx-404` chỉ đọc log của congtoan.net (cổng 80, ngưỡng 20 lần/5 phút), nên hiện tại không ảnh hưởng. Vẫn nên thêm `ignoreip = 139.180.158.221` cho các jail nginx để phòng sau này (**cần chủ site đồng ý**).
+- fail2ban: chủ site **không dùng fail2ban cho web** (site đi qua Cloudflare proxy, rule không hiệu quả). Kiểm tra ngày 27/11: service vẫn đang chạy, nhưng jail `nginx-404` chỉ đọc log congtoan.net và chỉ chặn cổng 80, nên **không ảnh hưởng** tới cache system. Không cần cấu hình gì thêm. Tình trạng fail2ban được theo dõi riêng ở `TODO_VPS.md` mục 8b.
 
 ## 5. Upload HTML lên S3 khi file cache nằm trên VPS chính
 
@@ -315,6 +315,13 @@ dott-cache-management/
 
 ## 14. Lộ trình triển khai
 
+### Quy tắc triển khai (chủ site yêu cầu, 27/11)
+1. **Làm từng giai đoạn một.** Mỗi giai đoạn phải **test kỹ và đạt tiêu chí "xong"** rồi mới sang giai đoạn sau. Không làm gộp 2 giai đoạn.
+2. **Không ảnh hưởng hệ thống đang chạy:** pipeline cũ (screen `F1`, `en-map-of`, các cron) vẫn chạy song song cho tới giai đoạn 5. Bản mới chạy **chỉ đọc hoặc dry-run** trước, sau đó so kết quả với bản cũ.
+3. Mọi thao tác **ghi** trên VPS chính (cài mu-plugin, sửa wp-config, dừng screen, sửa cron, kill process) đều phải **hỏi chủ site trước**, backup trước và có sẵn cách quay lại.
+4. Cuối mỗi giai đoạn: ghi kết quả test vào `docs/rollout-log.md` (làm gì, test gì, số liệu, vấn đề còn lại), commit, rồi báo chủ site để duyệt sang giai đoạn tiếp theo.
+5. Bật dần: số slot render bắt đầu từ 1; reconcile chỉ báo cáo trước; mỗi tính năng có cờ tắt nhanh (`dott-cache pause`, tắt timer, gỡ mu-plugin).
+
 | Giai đoạn | Nội dung | Chạm vào VPS chính? | Cách quay lại |
 |---|---|---|---|
 | **0. Chuẩn bị** | Tag `v0-legacy`. Tạo S3 key và CF token mới, quyền hẹp. Lấy CA Cloudflare Origin. Kill 3 tiến trình treo (F1) | Có (kill process, **hỏi trước**) | — |
@@ -332,5 +339,5 @@ dott-cache-management/
 2. **Cảnh báo log gần thời gian thực** (mục 10.3): có cần không, hay bản phân tích 23:45 là đủ?
 3. **Key SSH thứ hai cho dott-cache** có `command=` giới hạn (mục 11): đồng ý tạo, hay chỉ dùng REST và bỏ bước 4 của reconcile?
 4. **S3 key và CF token mới, quyền hẹp:** chủ site tự tạo trên Linode/Cloudflare (đề xuất), hay dùng tạm key hiện tại?
-5. **`ignoreip` cho fail2ban** trên VPS chính và **mở Netdata cho IP VPS phụ** khi khóa Netdata: đồng ý đưa vào giai đoạn 0?
+5. **Mở Netdata cho IP VPS phụ** khi khóa Netdata (TODO_VPS mục 2): đồng ý đưa vào giai đoạn 0? (Không cần cấu hình fail2ban, xem mục 4.)
 6. **Đồng bộ media sang AP** (F15): giữ ngoài hệ thống này (Media Cloud và `ct-media-s3-upload` đang lo), hay cần đưa phần đối soát media vào reconcile?
