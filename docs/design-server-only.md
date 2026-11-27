@@ -179,7 +179,7 @@ Chủ site chốt hướng (27/11):
     {"id":"fra","endpoint":"https://eu-central-1.linodeobjects.com","bucket":"...","prefix":"_cache_html/","workers":8}
   ]
   ```
-  Endpoint của Frankfurt sẽ xác nhận khi có thông tin bucket.
+  Bucket test (27/11): `congtoanphp` ở `https://us-ord-1.linodeobjects.com` và `https://eu-central-1.linodeobjects.com`. Cả hai đã kiểm tra ghi, đọc, xóa được bằng key hiện có (rollout-log, mục php81).
 - Mỗi đích có **client và pool riêng**. Một đích chậm hoặc lỗi không chặn đích khác.
 - SQLite thêm bảng `url_targets(path, target, etag, size, uploaded_at, fail_count, last_error)`. Một URL chỉ tính là "xong" khi mọi đích đang bật đều OK. Reconcile (mục 9) chạy riêng cho từng đích.
 - HTML chỉ lấy từ origin **một lần**, giữ trong RAM rồi đẩy cho mọi đích. Không lấy lại cho từng đích.

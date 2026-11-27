@@ -88,5 +88,18 @@ Mục đích: mô phỏng diaocthongthai.com để test tt-core, cache một b�
 - **Đính chính thiết kế:** response render mới **cũng có `Last-Modified`**. Dấu hiệu đúng của file cache là comment `cached@` (design mục 5, điểm 2).
 - Bài `map_*` lúc đầu trả 404 vì permalink của site mới là `/%year%/...`. Đổi về `/%postname%/` thì hết lỗi.
 
+### Bucket S3 test (chủ site tạo 27/11)
+- `congtoanphp` ở **us-ord-1** (Chicago) và **eu-central-1** (Frankfurt). Dùng key giống bucket `cdn.diaocthongthai.com` Chicago, đọc từ `cache-tools/utils.py` trên VPS chính. Không in ra, không chép đi đâu.
+- Kiểm tra từ VPS chính (Singapore) bằng boto3, mỗi bucket ghi rồi xóa 1 object `_tt-test/ping.txt`:
+
+| Bucket | head_bucket (kết nối mới) | list | PUT nhỏ, cùng kết nối (5 lần) |
+|---|---|---|---|
+| Chicago | 0,67 s | 0,25 s | **0,45 s** mỗi lần |
+| Frankfurt | 0,49 s | 0,28 s | **0,32 s** mỗi lần |
+
+- Cả 2 bucket đang trống (KeyCount = 0) và key hiện tại có quyền ghi.
+- PUT mất khoảng 2 RTT: boto3 gửi `Expect: 100-continue` rồi mới gửi body. Bản Go nên tắt cơ chế này để còn khoảng 1 RTT. Với 8 goroutine cho mỗi đích, dự kiến **18–25 PUT/s cho mỗi đích**. Sẽ đo lại từ VPS phụ.
+- Vẫn nên tạo **key riêng, quyền hẹp** cho dott-cache (design mục 12) trước khi đưa key sang VPS phụ.
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.
