@@ -95,6 +95,39 @@ Với vòng renew 30 ngày (khoảng 2.000 URL/ngày): v2 thường cần khoả
   - **Không có khác biệt nội dung nào.** Bản mobile (UA được đặt trước bootstrap) cũng đúng.
 - **Bằng chứng về "state dính từ master":** trong prefork, `wpa_field_info` **giống nhau cho mọi trang trong cùng một đợt**, vì giá trị được sinh lúc master bootstrap. Với file cache thì điều này vô hại, vì bản cache vốn đã dùng chung một giá trị cho mọi khách. Nhưng nó cho thấy rủi ro: plugin nào sinh dữ liệu "theo request" lúc `init` thì sẽ bị đóng băng theo đợt. Cần danh sách plugin như vậy trước khi dùng thật.
 
+## 4b. Prefork ghi cache thật (php81, 27/11 khuya)
+
+Script: `tools/prefork/prefork-render.php` (repo). Master bootstrap WordPress một lần, fork một tiến trình con cho mỗi URL. Tiến trình con render trang, chạy `rocket_buffer`, rồi gọi `WP_Rocket\Buffer\Cache::maybe_process_buffer()` để **chính WP Rocket ghi file cache** (footer `cached@`, file `_gzip`, đúng đường dẫn). Chạy dưới user của site, kết nối DB ở chế độ `READ ONLY`, con tự kết thúc bằng SIGKILL.
+
+**Các bẫy đã gặp và cách xử lý:**
+1. **Bootstrap bằng GET**, tới một path chắc chắn không có cache (`/<blog>/dott-prefork-boot-<pid>/`), rồi đóng mọi bộ đệm còn mở. Lúc đầu dùng POST: kết quả vẫn thiếu phần tối ưu, nhưng nguyên nhân thật là điểm 3.
+2. **Lấy HTML bằng `ob_end_flush()` vào bộ đệm riêng ở ngoài cùng**, không dùng `ob_get_clean()`. Lý do: WordPress 6.9 chèn CSS của block vào placeholder (`wp_block_styles_on_demand_placeholder`) trong callback của bộ đệm (`wp_finalize_template_enhancement_output_buffer`). `ob_get_clean()` không chạy callback, nên HTML thiếu CSS block.
+3. **Tự chạy bước tối ưu của WP Rocket.** Bộ đệm `Optimization` (chạy `rocket_buffer`: script LCP `rocket_lcp_data`, xử lý Google Fonts...) chỉ mở ở `template_redirect` khi `Tests::can_init_process()` đúng. Trong tiến trình con, instance tạo lúc master bootstrap trả false. Vì vậy tiến trình con tạo `Tests` mới theo request của mình, rồi tự chạy `rocket_before_maybe_process_buffer`, `rocket_buffer`, `rocket_after_process_buffer`. Kết quả: 20/20 trang được tối ưu.
+4. **Xóa kết quả ghi nhớ static** (trait Memoize) của các class `WP_Rocket\Buffer\{Tests, Config, Cache}` trong tiến trình con.
+5. **`WP_DEBUG_DISPLAY`**: php81 từng in `<b>Notice</b>` ra HTML (production không). Notice nằm trước `<!DOCTYPE>` thì WP Rocket không cache trang đó. Đã đặt `WP_DEBUG_DISPLAY` = false trên php81. Lưu ý: opcache của FPM chỉ đọc lại file sau `revalidate_freq` = 180 s.
+
+**So sánh với render qua HTTP** (cùng URL, bỏ qua dòng `cached@`, honeypot, nonce, `data-token-time`):
+- **19/20 trang giống hệt.**
+- Trang còn lại (chuyên mục) lệch ở danh sách bài. Danh sách này cũng thay đổi giữa 2 lần render HTTP liên tiếp (theme có cache danh sách riêng), nên không phải do prefork.
+
+**Tốc độ, 1.024 URL `/tttest/`, đã xóa cache trước:**
+
+| Cách render | Thời gian | URL/s | Mỗi URL | Tải VPS chính (load 1 phút) |
+|---|---|---|---|---|
+| HTTP qua PHP-FPM (Go uploader, 1 luồng, có upload S3) | 942,8 s | 1,1 | p50 849 ms | khoảng 1,1–1,2 |
+| **Prefork, 1 tiến trình con** | **73,0 s** | **14,0** | p50 64 ms, p95 84 ms (+ bootstrap 416 ms một lần) | trung bình 0,92, max 1,13 |
+| Prefork, 2 tiến trình con | 73,7 s | 13,9 | p50 128 ms | trung bình 1,49, max 1,76 |
+
+- 0 lỗi, đủ 1.024 `.html` + 1.024 `_gzip`, không có file mobile. RAM master tối đa 144 MB.
+- VPS chính **chỉ có 1 vCPU**, nên chạy 2 con song song không nhanh hơn mà tải tăng. **Chỉ dùng 1 con.**
+- **Lưu ý khi suy ra production:** php81 **không có Redis object cache** (production có), nên bootstrap và render qua HTTP trên php81 chậm hơn nhiều (khoảng 850 ms so với 250–350 ms trên production). Trên production bootstrap khoảng 180 ms, phần riêng của mỗi trang 40–420 ms (mục 2.3), nên dự kiến prefork **nhanh khoảng 3–5 lần** so với HTTP, không phải 13 lần. Cần đo lại trên production khi được phép.
+- Ước tính production, 60 nghìn URL, một bản HTML: HTTP khoảng 4–6 giờ; prefork khoảng 1–1,5 giờ.
+
+**Rủi ro còn lại trước khi dùng thật:**
+- Dữ liệu sinh lúc `init` của master bị **đóng băng theo đợt** (honeypot `wpa_field_info`). Với file cache thì vô hại, nhưng cần rà plugin.
+- Prefork phải chạy trên VPS chính (cần file WordPress và DB). Phương án: VPS phụ gọi qua `ssh main` với key giới hạn `command=`, hoặc một unit systemd trên VPS chính có `MemoryMax` (khoảng 200 MB), chạy dưới user của site, `nice`.
+- Cùng phiên bản WordPress và WP Rocket: script dựa vào API nội bộ của WP Rocket 3.16 (`Buffer\Cache`, `Buffer\Tests`). Khi nâng cấp WP Rocket phải chạy lại bài so sánh 20 URL (`tools/prefork/compare-20.sh`).
+
 ## 5. Desktop và mobile khác nhau gần như không đáng kể (A6)
 - So file cache trên đĩa: `/en/about-us/` lệch 2 dòng, một bài vi lệch 2 dòng, `/ban-tin-du-an/` 11 dòng, `/en/map-of-ho-chi-minh-city/` 4 dòng, trang chủ 39 dòng.
 - Khác biệt chính: theme nạp `thongthai-desktop.js` thay vì `thongthai-mobile.js`, và script `ct-multi-sticky-sidebar` chỉ có ở desktop.

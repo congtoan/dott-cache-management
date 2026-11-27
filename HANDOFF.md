@@ -66,21 +66,40 @@ Header S3 phải giữ khi upload: `ContentType: text/html`, `CacheControl: publ
 - **Chưa làm:**
   - `engine/vendor/` đã có: Peast v.1.18.2, minify 1.3.76, path-converter 1.1.3.
   - **Đã test trên php81.congtoan.net** (site 3 `/tttest/` và site 4 `/tttest-en/`): build, minify, desktop/mobile, lỗi cú pháp, rollback, đường lui đều đạt. Dashboard trên trình duyệt cũng đã thử: Kiểm tra cú pháp, Lưu và Generate, Quay về bản trước đều đạt. Chi tiết ở design-tt-core mục 11b.
-- Để sau (chủ site đã chốt): sticky sidebar, preload LCP trang chủ, wpDataTables.
+- Sticky sidebar: chủ site đã cập nhật plugin lên **3.2.0** (dùng module tt-core) và đã kiểm tra trên php81. Còn để sau: preload LCP trang chủ, wpDataTables.
+
+## 4c. Tối 27/11: một bản HTML, rocket-nginx, Go uploader, prefork (chi tiết: rollout-log, design 5b–5c, findings 4b)
+- **Đính chính:** trước đây **không có rocket-nginx**. File cache do `advanced-cache.php` (PHP) trả. Response render mới **cũng có `Last-Modified`**, nên dấu hiệu đúng của file cache là dòng `cached@`.
+- **rocket-nginx đã bật** (`/etc/nginx/extra/rocket-page-cache.conf`, nguồn `deploy/nginx/`) cho diaocthongthai.com và php81. Backup `*.conf.bak-2026-11-27`.
+  - Thư mục còn `.mobile-active` thì nginx bỏ qua, nên trên production **chưa có tác dụng** cho tới khi chuyển sang một bản HTML.
+  - Khi đã là một bản HTML: nginx trả thẳng file trong 5–13 ms.
+- **Một bản cache trong WP Rocket 3.16:** không có nút tắt trong giao diện; **không được đặt `cache_mobile` = 0** (khách mobile sẽ không được phục vụ cache). Cách dùng: mu-plugin `wp/mu-plugins/dott-single-cache.php` ép `cache_mobile` = 1, `do_caching_mobile_files` = 0. Đã cài trên php81, **chưa cài production**. `advanced-cache.php` dùng chung cho cả mạng multisite.
+- **php81.congtoan.net là môi trường test:**
+  - Site 3 `/tttest/` (vi, 1.000 bài thật) và site 4 `/tttest-en/` (en, 218 bài `map_*`), cùng plugin và thiết lập lấy từ production (bỏ license), cấu hình ACF, `WP_DEBUG_DISPLAY` = false.
+  - **Không có Redis**, nên render chậm hơn production.
+- **Bucket test** `congtoanphp` (us-ord-1, eu-central-1). Key S3 nằm ở `/etc/dott-cache/s3.env` trên VPS phụ (600; Claude trên VPS phụ bị cấm đọc).
+- **Go uploader thử** `/opt/dott-cache/bin/dott-cache upload` (code: `cmd/`, `internal/`):
+  - 1.024 URL × 2 bucket: **42,9 URL/s** với 16 luồng mỗi đích khi đã có cache, 0 lỗi, md5 khớp đĩa.
+  - Khi phải render qua HTTP: 1,1 URL/s.
+- **Prefork ghi cache thật** (`tools/prefork/`):
+  - 1.024 URL trong **73 s** (14 URL/s), so với 942 s qua HTTP. 19/20 trang giống hệt bản HTTP.
+  - Chỉ dùng 1 tiến trình con, vì VPS chính có 1 vCPU.
+  - Trên production dự kiến chỉ nhanh khoảng 3–5 lần (vì có Redis). **Chưa đo trên production.**
 
 ## 5. Việc tiếp theo (chủ site chọn)
-1. **Đo tác động của Query Monitor và của từng plugin** lên bootstrap (dùng prefork lab, chỉ đo, không tắt plugin thật). Đây là câu hỏi cuối cùng mình vừa hỏi chủ site.
-2. **Giai đoạn 2 của v2:** khung code Go (`cmd/dott-cache`, `internal/...`), SQLite, import `cache_urls.db`, lệnh `status`, test `paths` (so với `kv_key()` trong `legacy/pc/u2_update_db_and_kv_v3.4.py`). Chưa ghi gì lên VPS chính.
-3. Các quyết định thiết kế đang chờ chủ site (design mục 15):
+1. **Service `dott-cache` có hàng đợi** (SQLite, nhận sự kiện từ mu-plugin trên php81, render bằng HTTP hoặc prefork, upload nhiều đích), test trên php81 với bucket test.
+2. Đo prefork trên production (chỉ đọc, không ghi cache), khi chủ site cho phép.
+3. **Đo tác động của Query Monitor và của từng plugin** lên bootstrap (dùng prefork lab, chỉ đo, không tắt plugin thật).
+4. Các quyết định thiết kế đang chờ chủ site (design mục 15):
    - Vòng renew **30 ngày** (đề xuất) hay khoảng 90 ngày.
    - Có cần cảnh báo log gần thời gian thực không.
    - Tạo key SSH thứ hai, chỉ chạy được vài lệnh cố định (`command=`), cho service.
    - Mở Netdata cho IP VPS phụ khi khóa Netdata.
    - Media có đưa vào đối soát không.
-   - **Mới:** gộp desktop và mobile thành một bản HTML (sửa theme + Worker + tắt "Separate cache for mobile").
-   - **Mới:** chỉ lưu `.html` trên S3 (bỏ `_gzip`, sửa Worker).
-   - **Mới:** tắt việc WP Rocket tạo `_gzip` trên đĩa (khi sang v2, giai đoạn 5).
-   - **Mới:** prefork làm sau, chỉ khi cần renew toàn site nhanh.
+   - Gộp desktop và mobile thành một bản HTML: **đã chốt hướng** (tt-core, mu-plugin `dott-single-cache`, rocket-nginx), chưa áp dụng cho production.
+   - Chỉ lưu `.html` trên S3 (Worker cần sửa), nhiều đích S3 theo châu lục.
+   - **Giữ** `_gzip` trên đĩa: WP Rocket không có tùy chọn tắt, và rocket-nginx trả thẳng file này cho Cloudflare.
+   - Ping tức thì qua VPC Vultr, miễn rate limit nginx cho IP VPS phụ (design 15.7, 15.8).
 
 ## 6. Cách làm việc (bẫy đã gặp)
 - **Lệnh trên VPS chính:** `python vps.py run "lệnh"`. Lệnh nhiều dòng hoặc có `"`: dùng `@'...'@ | python vps.py run -`, vì PowerShell 5.1 làm rơi dấu `"`. `python vps.py put|get|sql|info` cũng có.

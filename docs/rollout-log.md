@@ -166,5 +166,16 @@ Mục đích: mô phỏng diaocthongthai.com để test tt-core, cache một b�
 - Khi phải render, nút cổ chai là PHP: khoảng 0,85 s mỗi trang ở 1 slot (khoảng 70 trang/phút), và load VPS chính khoảng 1,1. Đây là phần prefork có thể rút ngắn. Hiện chỉ cần khi render lại toàn site.
 - Object test (1.024 trang × 2 bucket) **vẫn để trên bucket test** để dùng cho bước tiếp theo. Dọn bằng `dott-cache delete -config ... -paths ...`.
 
+### Prefork ghi cache thật trên php81 (27/11 khuya)
+- Chi tiết: `findings-php-render-2026-11-27.md` mục 4b. Script trong repo: `tools/prefork/` (`prefork-render.php`, `compare-20.sh`, `full-run.sh`). Trên server: `/home/php81conZSI/prefork/`, `/root/pf-compare-20.sh`, `/root/pf-full-run.sh`.
+- Kết quả:
+  - **1.024 URL trong 73 s** (14 URL/s), 0 lỗi. Qua HTTP mất 942,8 s.
+  - Load trung bình 0,92. 2 tiến trình con song song không nhanh hơn, vì máy 1 vCPU.
+  - So với render qua HTTP: 19/20 trang giống hệt. Trang còn lại lệch ở danh sách bài, và danh sách này cũng lệch giữa các lần render HTTP.
+- Thay đổi trên php81 trong lúc test:
+  - `wp-config.php` thêm `WP_DEBUG_DISPLAY` = false (backup `wp-config.php.bak-2026-11-27-debug`).
+  - Cache `/tttest/` bị xóa và tạo lại nhiều lần. Hiện đang là bản do prefork tạo.
+- **Chưa thử trên production.** Số đo php81 không có Redis, nên phải đo lại trên production trước khi kết luận.
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.
