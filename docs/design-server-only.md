@@ -128,7 +128,7 @@ refresh(path):
   2. trigger: GET origin path, UA desktop   ─┐ đi qua render-limiter (1–2 slot), timeout 60 s
               GET origin path, UA iPhone    ─┘ đo thời gian render → đưa vào throttle (mục 6)
   3. fetch:   GET lại 2 lần, KHÔNG gửi Accept-Encoding (nhận nguyên file .html trên đĩa)
-              phải thỏa: 200, không có Content-Encoding, Last-Modified >= t0 - 2 s (đúng file mới tạo),
+              phải thỏa: 200, không có Content-Encoding (Last-Modified KHÔNG đủ, xem điểm 2 bên dưới),
                          có </html>, có comment "Debug: cached@<ts>" với ts >= t0,
                          > 2 KB, bản mobile khác bản desktop
               → tự gzip -9 ra 2 file _gzip (khoảng 7 ms/file trên VPS phụ)
@@ -147,7 +147,7 @@ remove(path): KV delete → S3 delete 4 file → POST purge → status = 'remove
 
 **Phải kiểm tra ở giai đoạn 1, trước khi chạy thật:**
 1. So `md5` của file lấy qua HTTP với file trên đĩa (qua `ssh main md5sum`) cho khoảng 50 URL (desktop/mobile, vi/en, trang chủ/bài/archive/phân trang).
-2. Xác nhận response đầu tiên do PHP render (khi chưa có cache) **không bao giờ** được dùng để upload. Bước 3 luôn GET lại và đòi `Last-Modified`, vì header này do `advanced-cache.php` đặt khi trả file cache (`filemtime`). Cần kiểm tra lại trên php81 rằng response render mới không có header này.
+2. Xác nhận response đầu tiên do PHP render (khi chưa có cache) **không bao giờ** được dùng để upload. Bước 3 luôn GET lại. **Đính chính sau khi đo trên php81 (27/11 tối):** response render mới (lần đầu, mất 0,6–1,6 s) **cũng có `Last-Modified`**, nên không dùng header này để phân biệt. Dấu hiệu đúng là **comment `Debug: cached@<ts>`**: chỉ có trong file WP Rocket đã ghi xuống đĩa, response render mới không có (đo 5 URL × desktop/mobile). Bước 3 đòi có `cached@` với `ts >= t0`.
 3. Content-Type và Content-Encoding trên S3 phải giống hệt bản tool cũ đang upload, để Worker `thongthai-cache-v7.js` không bị ảnh hưởng.
 
 ## 5b. Cập nhật 27/11 tối: một bản HTML, nhiều đích S3, upload qua pool trên VPS phụ

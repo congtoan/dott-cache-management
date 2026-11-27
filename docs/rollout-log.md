@@ -63,8 +63,30 @@ Câu hỏi được kiểm tra: khi VPS phụ gọi một URL đã có cache, n�
 - `_gzip` trên S3 không còn giống từng byte với `_gzip` trên đĩa VPS chính, nhưng **giải nén ra giống hệt nhau**. Worker Cloudflare chỉ cần một file gzip hợp lệ.
 
 **Phát hiện thêm (không thuộc cache system, chỉ ghi lại):**
-- rocket-nginx có `location ~ ..._gzip$`, nhưng request gzip thực tế vẫn được nginx nén lại từ file `.html`. Tức là **mỗi lượt khách qua Cloudflare đều tốn CPU nén** trên VPS chính, dù WP Rocket đã có sẵn file `_gzip`.
-- Nếu muốn tiết kiệm CPU VPS chính thì có thể xem lại cấu hình rocket-nginx sau. Cần chủ site quyết định; chưa đụng tới.
+- ~~rocket-nginx có `location ~ ..._gzip$`~~ **Đính chính 27/11 tối:** rocket-nginx **không được include** trong nginx. WP Rocket `advanced-cache.php` đọc `_gzip` bằng `readgzfile()` (giải nén), rồi nginx nén lại. Tức là **mỗi lượt khách qua Cloudflare đều tốn CPU giải nén và nén lại** trên VPS chính, dù WP Rocket đã có sẵn file `_gzip`.
+- Nếu muốn tiết kiệm CPU VPS chính thì có thể bật rocket-nginx (đã có sẵn ở `/etc/nginx/rocket-nginx/`) hoặc bỏ `_gzip`. Cần chủ site quyết định; chưa đụng tới.
+
+---
+
+## Môi trường test php81.congtoan.net (2026-11-27 tối, chủ site đồng ý)
+
+Mục đích: mô phỏng diaocthongthai.com để test tt-core, cache một bản HTML, upload S3 nhiều đích, đổi version. **Chưa đụng site chính** (production chỉ đọc).
+
+| Việc | Chi tiết |
+|---|---|
+| Site test | Site 3 `/tttest/` (theme `generatepress_child` + tt-core, đóng vai vi), site 4 `/tttest-en/` (`generatepress_en`, đóng vai en). Site 1 và 2 của php81 giữ nguyên |
+| Plugin chép từ production | wp-rocket **3.16**, wp-rocket-no-cache-auto-purge, wp-rocket-preload-change-parameters, wp-rocket-cache-count, gp-premium, ct-site-enhancer (network), honeypot, kk-star-ratings, luckywp-table-of-contents, seo-by-rank-math (+pro), shortcoder, ct-multi-sticky-sidebar **3.0.0** (network, thay bản 2.0.0). Bản cũ (wp-rocket 3.18, sticky 2.0.0) đã chuyển sang `/home/php81conZSI/plugin-backup-2026-11-27/`. Bật trên site 3 và site 4 giống blog 1 và 2 của production, thêm ACF Pro và WPForms. **Không chép:** wpdatatables, smart-slider-3, redis-cache, query-monitor, wp-all-import/export, redirection |
+| Thiết lập chép | `wp_rocket_settings` (**bỏ các trường license**: consumer_key, consumer_email, secret_key, license, secret_cache_key), `generate_*`, `theme_mods_generatepress_*` (bỏ menu và logo), `sidebars_widgets` và `widget_*`, `lss_settings`/`lss_runtime`, `kksr_*`, `lwptoc_*`. Permalink `/%postname%/`, tag base `tags` (giống production). Cấu hình ACF (`acf-post-type`, `acf-taxonomy`, `acf-field-group`, `acf-field`): vi 23 bản ghi, en 8 (đăng ký `map_0`…`map_3`) |
+| Bài viết | Lấy ngẫu nhiên bài thật từ production (chỉ đọc DB), kèm chuyên mục, tag, meta: **vi 1.000 `post`** (22 chuyên mục); **en 218** (193 `map_3`, 24 `map_2`, 1 `map_0`). Blog en của production chỉ có 18 bài loại `post`, phần lớn nội dung là `map_*`. File JSON tạm trong `/tmp` đã xóa |
+| `wp-config.php` của php81 | WP Rocket tự đặt `WP_CACHE` = true. Đã backup `wp-config.php.bak-2026-11-27` |
+| License WP Rocket | `rocket_valid_key()` = yes trên site test (license php81 có sẵn từ trước, Claude không nhập key) |
+
+**Kết quả kiểm tra:**
+- Cache chạy giống production: render lần đầu 0,6–1,6 s, các lần sau 10–30 ms do `advanced-cache.php` trả. Có **4 file mỗi URL** (desktop, mobile, mỗi loại thêm `_gzip`).
+- Bản desktop và mobile chỉ khác ở: `lss-3.js` (sticky sidebar, để sau), honeypot `wpa_field_info` (giá trị ngẫu nhiên), `rocket_lcp_data` (cờ mobile của WP Rocket), `cached@`. Phần tt-core giống hệt nhau.
+- **Lỗi gặp và đã sửa:** `advanced-cache.php` được tạo lúc "cache mobile" còn tắt nên thiếu `Mobile_Detect`, làm khách mobile nhận bản desktop. Đã tạo lại bằng `rocket_generate_advanced_cache_file()`. Ghi nhớ: **sau khi đổi `cache_mobile` phải tạo lại file này.**
+- **Đính chính thiết kế:** response render mới **cũng có `Last-Modified`**. Dấu hiệu đúng của file cache là comment `cached@` (design mục 5, điểm 2).
+- Bài `map_*` lúc đầu trả 404 vì permalink của site mới là `/%year%/...`. Đổi về `/%postname%/` thì hết lỗi.
 
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.
