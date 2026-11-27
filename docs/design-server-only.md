@@ -159,6 +159,8 @@ Chủ site chốt hướng (27/11):
 
 > **Đính chính (27/11 tối, đo trên production, chỉ đọc):** nginx **không có rocket-nginx** (`nginx -T` không có dòng nào chứa "rocket"; thư mục `/etc/nginx/rocket-nginx/` có nhưng không được include). File cache được **PHP trả** qua `wp-content/advanced-cache.php` của WP Rocket: `readfile()` cho `.html`, `readgzfile()` cho `_gzip` (giải nén rồi nginx nén lại, đúng như kết quả giai đoạn 1), và đặt `Last-Modified` = mtime. Một request tới `/en/about-us/` mất 6–8 ms, không bootstrap WordPress.
 > Hệ quả: mỗi lần lấy HTML vẫn chiếm một worker PHP-FPM trong vài ms. Khi lấy hàng loạt phải giới hạn số kết nối đồng thời theo `pm.max_children` của pool, và theo dõi tải. Các chỗ trước đây ghi "nginx sendfile" đã được sửa.
+>
+> **Cập nhật 27/11 khuya:** đã bật rocket-nginx đã chỉnh sửa (`/etc/nginx/extra/rocket-page-cache.conf`) cho diaocthongthai.com và php81. Khi site chỉ còn **một bản HTML**, nginx trả thẳng file cache (5–13 ms, không dùng PHP). Khi còn tách mobile (`.mobile-active`) thì vẫn đi qua PHP như cũ. Chi tiết ở rollout-log.
 - **Upload lên nhiều S3**, không chỉ một. Bucket test sắp có: Linode **Chicago** và **Frankfurt**. Chủ site sẽ gửi thông tin sau.
 
 ### Thay đổi so với mục 5
@@ -363,7 +365,7 @@ Unit systemd theo mẫu của skill `vps-claude-control` (`references/deploy-ser
 
 | Bí mật | Nằm ở | Ghi chú |
 |---|---|---|
-| S3 Linode key | `/etc/dott-cache/env` (VPS phụ) | Nên tạo **key mới chỉ có quyền trên bucket `cdn.diaocthongthai.com`** thay vì copy key hiện tại. Thu hồi key cũ trên VPS chính sau khi chuyển xong |
+| S3 Linode key | `/etc/dott-cache/s3.env` (VPS phụ, root 600, **đã có từ 27/11**, cùng key bucket Chicago hiện tại; Claude trên VPS phụ bị cấm đọc) | Nên tạo **key mới chỉ có quyền trên bucket `cdn.diaocthongthai.com`** thay vì copy key hiện tại. Thu hồi key cũ trên VPS chính sau khi chuyển xong |
 | Cloudflare token | như trên | Token riêng, chỉ có quyền **Workers KV Storage:Edit** trên account (F16); không dùng chung token đã dán trong chat |
 | `DOTT_CACHE_TOKEN` (REST) | `wp-config.php` + env VPS phụ | Sinh ngẫu nhiên 48 ký tự |
 | Telegram bot | dùng chung với `/root/health` | |

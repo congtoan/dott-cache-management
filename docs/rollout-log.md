@@ -101,5 +101,43 @@ Mục đích: mô phỏng diaocthongthai.com để test tt-core, cache một b�
 - PUT mất khoảng 2 RTT: boto3 gửi `Expect: 100-continue` rồi mới gửi body. Bản Go nên tắt cơ chế này để còn khoảng 1 RTT. Với 8 goroutine cho mỗi đích, dự kiến **18–25 PUT/s cho mỗi đích**. Sẽ đo lại từ VPS phụ.
 - Vẫn nên tạo **key riêng, quyền hẹp** cho dott-cache (design mục 12) trước khi đưa key sang VPS phụ.
 
+### rocket-nginx: nginx phục vụ thẳng file cache (chủ site yêu cầu, 27/11 tối)
+- File cấu hình: `/etc/nginx/extra/rocket-page-cache.conf` (nguồn trong repo: `deploy/nginx/rocket-page-cache.conf`). Lấy phần PAGE CACHE của rocket-nginx 3.0.2, có sửa:
+  - Bỏ các block CSS/JS/media, để giữ header 1 năm `immutable` của `staticfiles.conf`.
+  - Bỏ quy tắc brotli, vì nginx này không có brotli: nhận gzip thì trả thẳng `_gzip`.
+  - Dùng `location ^~ /wp-content/cache/wp-rocket/`. Lý do: `wordpress_secure.conf` có location `.html$` đặt `expires 365d`. Nếu nó bắt được file HTML thì trang sẽ bị cache 1 năm.
+  - Bỏ qua thêm theo UA `facebookexternalhit|WhatsApp`, giống WP Rocket.
+- Đã include trong server 443 của **php81.congtoan.net** và **diaocthongthai.com**, đặt sau khối `if (!-e $request_filename)` và sau luật chặn UA rỗng.
+  - Backup: `/etc/nginx/conf.d/*.conf.bak-2026-11-27`.
+  - `nginx -t` OK, đã `systemctl reload nginx`.
+  - congtoan.net **không** áp dụng, vì không dùng WP Rocket.
+- **Giới hạn quan trọng:** thư mục URL nào có `.mobile-active` (WP Rocket đang tách cache mobile) thì rocket-nginx **bỏ qua** và để PHP trả như cũ. Production đang tách mobile nên hiện **chưa có lợi ích**: kiểm tra 4 URL × desktop/mobile, tất cả 200, có `cached@`, có gzip, UA rỗng vẫn 403, error log không có lỗi mới. rocket-nginx chỉ phát huy khi chuyển sang một bản HTML.
+- Kết quả trên php81 `/tttest/`, đã chuyển sang **một bản HTML** (`cache_mobile` = 0) để thử:
+
+| Request | Kết quả |
+|---|---|
+| Desktop, lần 2 | **HIT** 5–13 ms, md5 giống file trên đĩa, `text/html; charset=utf-8`, không có Cache-Control (giống trước) |
+| Có `Accept-Encoding: gzip, br` | HIT, trả `_gzip` (16 KB thay vì 64 KB) |
+| Mobile | HIT, cùng file với desktop |
+| `?utm_source=` | HIT |
+| `?x=1`, cookie `wordpress_logged_in_`, UA facebookexternalhit, POST | BYPASS, PHP render |
+| `/tttest-en/` (vẫn tách mobile) | BYPASS, PHP trả đúng bản desktop/mobile |
+
+- Lỗi gặp và đã sửa: `advanced-cache.php` **dùng chung cho cả mạng multisite** và được tạo theo thiết lập của site đang chạy lệnh. Tạo từ site đã tắt cache mobile thì site còn tách mobile bị trả nhầm bản desktop. Đã tạo lại từ `/tttest-en/`. Trên production cả 2 blog cùng thiết lập nên không gặp lỗi này. Khi chuyển production sang một bản HTML thì phải chuyển **cả 2 blog cùng lúc**, rồi tạo lại file này.
+- Header `X-Rocket-Nginx-Serving-Static` có lúc không xuất hiện, do giới hạn của `add_header` ở cấp server. Chỉ là header debug.
+
+### Sticky sidebar 3.2.0 (chủ site cập nhật) trên site test
+- Module `ct-multi-sticky-sidebar` (device desktop, nguồn plugin) đã có trong bản build tt-core của cả 2 site. HTML không còn thẻ `lss-*.js`.
+- So HTML render desktop với mobile: chỉ còn lệch honeypot. Có lúc lệch thêm `og:image`, nhưng đó là hiện tượng **riêng của php81**: thẻ chỉ có ở lần render đầu tiên của mỗi bài, thiết bị nào cũng vậy (đã thử thứ tự M-D-D-M trên 4 bài). Nhiều khả năng do bài test không có ảnh đại diện. Production render nhiều lần vẫn luôn có `og:image`.
+- Trình duyệt:
+  - Desktop 1366px: tải `lss-3.js`, sidebar `position: fixed` khi cuộn, 0 lỗi.
+  - Desktop 887px (< `minWidth` 901): không tải.
+  - Mobile: module bị bỏ qua, không tải.
+
+### Key S3 trên VPS phụ (chủ site giao Claude quản lý)
+- `/etc/dott-cache/s3.env` (root, 600; thư mục 700), gồm `S3_ACCESS_KEY` và `S3_SECRET_KEY`. Lấy thẳng từ VPS chính qua `ssh main`, không hiện ra hội thoại. Đây cùng key với bucket `cdn.diaocthongthai.com` Chicago.
+- Đã thử từ VPS phụ bằng `curl --aws-sigv4`: list `congtoanphp` us-ord-1 OK (0,69 s), eu-central-1 OK (0,50 s). Key được đưa vào curl qua file config tạm, không lộ trên `ps`.
+- Claude trên VPS phụ: đã thêm luật cấm `Read(/etc/dott-cache/**)`, `Bash(cat /etc/dott-cache/*)`, `Bash(*/etc/dott-cache/*)` vào `/root/.claude/settings.json` (siết quyền, có backup `.bak-2026-11-27`).
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.
