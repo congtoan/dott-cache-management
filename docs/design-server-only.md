@@ -11,7 +11,7 @@
 | Nơi chạy worker, lịch, đối soát | VPS chính | **VPS phụ** (139.180.158.221) |
 | Ngôn ngữ | Python (boto3, pymysql, psutil) | **Go**: một file binary, RAM khoảng 15–40 MB |
 | Lưu trạng thái | MariaDB `dott_cache` trên VPS chính | **SQLite (WAL) trên VPS phụ**. Chỉ một tiến trình Go ghi nên không còn lỗi khóa. Trên VPS chính chỉ còn một bảng sự kiện nhỏ |
-| Lấy HTML để upload S3 | Đọc file trên đĩa (127.0.0.1) | **Gọi HTTP tới origin** và nhận đúng file cache tĩnh do nginx phục vụ ([mục 5](#5-upload-html-lên-s3-khi-file-cache-nằm-trên-vps-chính)) |
+| Lấy HTML để upload S3 | Đọc file trên đĩa (127.0.0.1) | **Gọi HTTP tới origin** và nhận đúng file cache do `advanced-cache.php` của WP Rocket trả về ([mục 5](#5-upload-html-lên-s3-khi-file-cache-nằm-trên-vps-chính)) |
 | Biết URL nào thay đổi | mu-plugin INSERT vào MariaDB, worker đọc trực tiếp | mu-plugin INSERT vào bảng sự kiện, **VPS phụ hỏi qua REST** (`/wp-json/dott-cache/v1/...`) |
 | Đo tải để tạm dừng | `psutil` trên chính máy chạy | **Netdata API** của VPS chính, thời gian render, dự phòng bằng `ssh main` ([mục 6](#6-tự-điều-tiết-theo-tải-vps-chính)) |
 | Báo cáo | Chưa chọn kênh | **Telegram** (giống `/root/health` trên VPS phụ) |
@@ -107,7 +107,7 @@ Giới hạn trên VPS chính cần biết:
 | | A. Lấy qua HTTP từ origin (**đề xuất**) | B. Lấy file qua `ssh main` | C. Giữ một agent upload nhỏ trên VPS chính |
 |---|---|---|---|
 | Cách làm | Sau khi trigger, GET lại URL **không gửi `Accept-Encoding`** (desktop UA và iPhone UA), nhận nguyên file `.html` trên đĩa. VPS phụ tự tạo `_gzip` (gzip -9). **Đã kiểm chứng ngày 27/11:** 40/40 file `.html` khớp md5 với đĩa; nginx không trả file `_gzip` mà nén lại lúc gửi, nên không lấy bản gzip qua HTTP (xem rollout-log, giai đoạn 1) | `ssh main "cat file1 file2 ..."` hoặc `tar` theo lô, nhận về VPS phụ rồi upload | VPS phụ ra lệnh, agent trên VPS chính tự upload S3 như bây giờ |
-| Tải VPS chính | Rất thấp: nginx gửi file tĩnh bằng sendfile (8–25 ms), không nén, không gọi PHP | Thấp–vừa: mỗi lô tốn một phiên SSH (mã hóa, fork process) | Như hiện tại: TLS tới S3 + SDK + RAM |
+| Tải VPS chính | Thấp: `advanced-cache.php` của WP Rocket `readfile()` file cache, khoảng 6–25 ms, **có dùng một worker PHP-FPM nhưng không bootstrap WordPress** (đính chính 27/11 tối, xem mục 5b) | Thấp–vừa: mỗi lô tốn một phiên SSH (mã hóa, fork process) | Như hiện tại: TLS tới S3 + SDK + RAM |
 | Chính xác | `.html` giống từng byte với file trên đĩa (đã kiểm chứng). `_gzip` do VPS phụ tạo, giải nén ra giống hệt `.html` | Giống từng byte | Giống từng byte |
 | Cần quyền gì | Không cần gì thêm | Đọc file bằng root qua SSH | Secret S3 vẫn nằm trên VPS chính |
 | Băng thông | Khoảng 230 KB/URL (2 × 114 KB, chưa nén). 60 nghìn URL khoảng 14 GB mỗi vòng renew | Tương tự | Không đổi |
@@ -147,7 +147,7 @@ remove(path): KV delete → S3 delete 4 file → POST purge → status = 'remove
 
 **Phải kiểm tra ở giai đoạn 1, trước khi chạy thật:**
 1. So `md5` của file lấy qua HTTP với file trên đĩa (qua `ssh main md5sum`) cho khoảng 50 URL (desktop/mobile, vi/en, trang chủ/bài/archive/phân trang).
-2. Xác nhận response đầu tiên do PHP render (khi chưa có cache) **không bao giờ** được dùng để upload. Bước 3 luôn GET lại và đòi `Last-Modified`, vì header này chỉ có khi nginx phục vụ file tĩnh.
+2. Xác nhận response đầu tiên do PHP render (khi chưa có cache) **không bao giờ** được dùng để upload. Bước 3 luôn GET lại và đòi `Last-Modified`, vì header này do `advanced-cache.php` đặt khi trả file cache (`filemtime`). Cần kiểm tra lại trên php81 rằng response render mới không có header này.
 3. Content-Type và Content-Encoding trên S3 phải giống hệt bản tool cũ đang upload, để Worker `thongthai-cache-v7.js` không bị ảnh hưởng.
 
 ## 5b. Cập nhật 27/11 tối: một bản HTML, nhiều đích S3, upload qua pool trên VPS phụ
@@ -155,7 +155,10 @@ remove(path): KV delete → S3 delete 4 file → POST purge → status = 'remove
 Chủ site chốt hướng (27/11):
 - **Một bản HTML** cho desktop và mobile. Theme dùng tt-core ([design-tt-core.md](design-tt-core.md)). Sau khi xử lý xong sticky sidebar, preload LCP và wpDataTables, thì tắt "Separate cache for mobile".
 - **Upload S3 chuyển hẳn sang VPS phụ**, dùng Go: client S3 dùng chung, kết nối keep-alive, một pool goroutine. VPS chính chỉ báo "path X cần upload", còn pool lo phần còn lại.
-- VPS phụ lấy HTML bằng **HTTP tới origin**, tức nhận đúng file cache nginx đang phục vụ, không dùng SSH.
+- VPS phụ lấy HTML bằng **HTTP tới origin**, tức nhận đúng file cache đang phục vụ cho khách, không dùng SSH.
+
+> **Đính chính (27/11 tối, đo trên production, chỉ đọc):** nginx **không có rocket-nginx** (`nginx -T` không có dòng nào chứa "rocket"; thư mục `/etc/nginx/rocket-nginx/` có nhưng không được include). File cache được **PHP trả** qua `wp-content/advanced-cache.php` của WP Rocket: `readfile()` cho `.html`, `readgzfile()` cho `_gzip` (giải nén rồi nginx nén lại, đúng như kết quả giai đoạn 1), và đặt `Last-Modified` = mtime. Một request tới `/en/about-us/` mất 6–8 ms, không bootstrap WordPress.
+> Hệ quả: mỗi lần lấy HTML vẫn chiếm một worker PHP-FPM trong vài ms. Khi lấy hàng loạt phải giới hạn số kết nối đồng thời theo `pm.max_children` của pool, và theo dõi tải. Các chỗ trước đây ghi "nginx sendfile" đã được sửa.
 - **Upload lên nhiều S3**, không chỉ một. Bucket test sắp có: Linode **Chicago** và **Frankfurt**. Chủ site sẽ gửi thông tin sau.
 
 ### Thay đổi so với mục 5
@@ -192,7 +195,7 @@ Chủ site chốt hướng (27/11):
 | Bước | Giới hạn | Thời gian |
 |---|---|---|
 | GET file cache từ origin | nginx `limit_req` **10 r/s** cho mỗi IP (mục 4) | khoảng **1 giờ 40 phút** |
-| GET, sau khi miễn rate limit cho IP VPS phụ (`geo` + `map` trong nginx, **cần chủ site đồng ý**, `nginx -t` trước khi reload) | sendfile 8–25 ms/file, giữ 4–8 kết nối | khoảng 15–25 phút |
+| GET, sau khi miễn rate limit cho IP VPS phụ (`geo` + `map` trong nginx, **cần chủ site đồng ý**, `nginx -t` trước khi reload) | `advanced-cache.php` 6–25 ms/file, giữ 4 kết nối (mỗi kết nối chiếm một worker PHP-FPM) | khoảng 15–25 phút |
 | PUT S3 cho mỗi đích | 8 goroutine, PUT trên kết nối sẵn khoảng 0,25–0,4 s (RTT Chicago khoảng 220 ms) | khoảng 30–50 phút cho mỗi đích, các đích chạy song song |
 | Render lại (khi cache trên đĩa bị xóa) | PHP 0,2–0,6 s/URL, 1–2 slot | khoảng 9 giờ (một bản HTML) |
 
