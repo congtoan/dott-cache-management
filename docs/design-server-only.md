@@ -21,6 +21,7 @@ Các quyết định của chủ site (25–27/11):
 - Khi bấm "Clear all cache": mặc định chỉ xóa trên server, **không xóa S3**.
 - `/es/` bỏ qua.
 - **Không** upload HTML lên bucket Singapore.
+- (27/11 tối) **Một bản HTML** cho desktop và mobile (tt-core). Upload S3 do pool Go trên VPS phụ làm. **Nhiều đích S3** (đang test Chicago và Frankfurt). Đổi version thì sửa HTML cache và purge Cloudflare. Test trên php81.congtoan.net, chưa đụng site chính. Xem mục 5b, 5c, 14b.
 - Dùng repo `dott-cache-management`. Code mới nằm ở `D:\Claude\2026-11-27 Cache System v2`. Trên server: `/opt/dott-cache` (VPS phụ) và `/root/tool/diaocthongthai.com/cache-system` (phần nhỏ còn lại trên VPS chính, nếu có).
 
 ## 1. Nguyên tắc
@@ -148,6 +149,85 @@ remove(path): KV delete → S3 delete 4 file → POST purge → status = 'remove
 1. So `md5` của file lấy qua HTTP với file trên đĩa (qua `ssh main md5sum`) cho khoảng 50 URL (desktop/mobile, vi/en, trang chủ/bài/archive/phân trang).
 2. Xác nhận response đầu tiên do PHP render (khi chưa có cache) **không bao giờ** được dùng để upload. Bước 3 luôn GET lại và đòi `Last-Modified`, vì header này chỉ có khi nginx phục vụ file tĩnh.
 3. Content-Type và Content-Encoding trên S3 phải giống hệt bản tool cũ đang upload, để Worker `thongthai-cache-v7.js` không bị ảnh hưởng.
+
+## 5b. Cập nhật 27/11 tối: một bản HTML, nhiều đích S3, upload qua pool trên VPS phụ
+
+Chủ site chốt hướng (27/11):
+- **Một bản HTML** cho desktop và mobile. Theme dùng tt-core ([design-tt-core.md](design-tt-core.md)). Sau khi xử lý xong sticky sidebar, preload LCP và wpDataTables, thì tắt "Separate cache for mobile".
+- **Upload S3 chuyển hẳn sang VPS phụ**, dùng Go: client S3 dùng chung, kết nối keep-alive, một pool goroutine. VPS chính chỉ báo "path X cần upload", còn pool lo phần còn lại.
+- VPS phụ lấy HTML bằng **HTTP tới origin**, tức nhận đúng file cache nginx đang phục vụ, không dùng SSH.
+- **Upload lên nhiều S3**, không chỉ một. Bucket test sắp có: Linode **Chicago** và **Frankfurt**. Chủ site sẽ gửi thông tin sau.
+
+### Thay đổi so với mục 5
+| | Mục 5 (sáng 27/11) | Bản này |
+|---|---|---|
+| File mỗi URL | 4 (`.html`, `_gzip` × desktop, mobile) | **1** `index-https.html`. Bỏ `_gzip`, vì Cloudflare tự nén response do Worker trả về (đã đo, findings mục 6) |
+| Lấy HTML | 2 GET (desktop UA, iPhone UA) | **1 GET**, không gửi `Accept-Encoding` |
+| Kiểm tra HTML | "bản mobile khác bản desktop" | Bỏ điều kiện này. Thay bằng: có `tt-core/core.js` |
+| Đích S3 | Chicago `cdn.diaocthongthai.com` | **Danh sách đích** trong config. Mỗi đích có pool, retry và trạng thái riêng |
+
+**Giai đoạn chuyển tiếp** (WP Rocket vẫn còn tách cache mobile, Worker v7 vẫn chọn key theo thiết bị): VPS phụ lấy bản desktop rồi upload **cùng nội dung** lên cả key desktop lẫn key mobile. Worker chưa cần sửa. Khi Worker đã chỉ dùng một key thì bỏ bước upload key mobile.
+
+### Nhiều đích S3
+- Config:
+  ```json
+  "targets": [
+    {"id":"ord","endpoint":"https://us-ord-1.linodeobjects.com","bucket":"cdn.diaocthongthai.com","prefix":"_cache_html/","workers":8},
+    {"id":"fra","endpoint":"https://eu-central-1.linodeobjects.com","bucket":"...","prefix":"_cache_html/","workers":8}
+  ]
+  ```
+  Endpoint của Frankfurt sẽ xác nhận khi có thông tin bucket.
+- Mỗi đích có **client và pool riêng**. Một đích chậm hoặc lỗi không chặn đích khác.
+- SQLite thêm bảng `url_targets(path, target, etag, size, uploaded_at, fail_count, last_error)`. Một URL chỉ tính là "xong" khi mọi đích đang bật đều OK. Reconcile (mục 9) chạy riêng cho từng đích.
+- HTML chỉ lấy từ origin **một lần**, giữ trong RAM rồi đẩy cho mọi đích. Không lấy lại cho từng đích.
+- **Worker cần sửa** để chọn đích theo châu lục của khách (Bắc/Nam Mỹ → Chicago, châu Âu → Frankfurt) và xử lý trường hợp URL đã có ở đích này nhưng chưa có ở đích kia. Ví dụ: giá trị KV ghi danh sách đích đã có (`"ord,fra"`) thay vì chỉ cần có key. Việc này làm riêng, có test.
+
+### Cách VPS chính báo cho VPS phụ
+Ý của chủ site là VPS chính gửi path sang pool. Đề xuất cách làm cho chắc chắn:
+1. **Nguồn sự thật là bảng sự kiện trên VPS chính** (mục 7.1): hook hoặc tool chỉ INSERT một dòng. VPS phụ lấy về qua REST `/changes` rồi `ack`. Không mất việc khi VPS phụ restart hay mạng chập chờn.
+2. **Đánh thức ngay (tùy chọn):** VPS chính gửi một "ping" sang VPS phụ để nó lấy ngay, không phải đợi vòng polling 5–30 giây. Mất ping cũng không sao. Vì quy tắc "service bind `127.0.0.1`, UFW chỉ mở 22" (mục 12), ping chỉ được nghe trên **mạng nội bộ VPC của Vultr** (2 máy cùng datacenter Singapore), có token. Cần chủ site đồng ý bật VPC.
+3. Tool hàng loạt (ví dụ đổi version, mục 5c) cũng ghi vào bảng sự kiện, với `action = 'upload'`: chỉ lấy và upload, **không render lại**.
+
+### Tốc độ dự kiến khi upload hàng loạt (60 nghìn URL, 1 file/URL)
+| Bước | Giới hạn | Thời gian |
+|---|---|---|
+| GET file cache từ origin | nginx `limit_req` **10 r/s** cho mỗi IP (mục 4) | khoảng **1 giờ 40 phút** |
+| GET, sau khi miễn rate limit cho IP VPS phụ (`geo` + `map` trong nginx, **cần chủ site đồng ý**, `nginx -t` trước khi reload) | sendfile 8–25 ms/file, giữ 4–8 kết nối | khoảng 15–25 phút |
+| PUT S3 cho mỗi đích | 8 goroutine, PUT trên kết nối sẵn khoảng 0,25–0,4 s (RTT Chicago khoảng 220 ms) | khoảng 30–50 phút cho mỗi đích, các đích chạy song song |
+| Render lại (khi cache trên đĩa bị xóa) | PHP 0,2–0,6 s/URL, 1–2 slot | khoảng 9 giờ (một bản HTML) |
+
+Các số trên là **ước tính**, sẽ đo lại trên php81 (mục 14b) và với bucket test.
+
+## 5c. Đổi version CSS/JS: sửa HTML cache + purge Cloudflare
+
+Chủ site (27/11): sửa `?ver=` ngay trong HTML cache vẫn cần thiết, vì **có hiệu lực ngay**, kể cả với khách đã có CSS/JS cũ trong cache trình duyệt (`max-age=31536000, immutable`). Purge Cloudflare dùng **kết hợp** với cách này.
+
+Tool cũ `/root/tool/diaocthongthai.com/replace_cache_update_version.py` (và bản `_en`) được viết từ thời chưa có S3 và có 4 bản cache. Có mấy điểm cần làm lại (đã đọc code 27/11):
+- **Ghi đè ngay trên file đang phục vụ** (mmap rồi resize). Khách có thể nhận file ghi dở.
+- `time.sleep(0.1)` cho mỗi file với 32 luồng trên máy 1 vCPU: riêng thời gian ngủ đã khoảng 12 phút cho 237 nghìn file, lại tranh CPU với PHP-FPM.
+- Sửa cả `_gzip` (giải nén rồi nén lại), là phần tốn CPU nhất, trong khi nginx **không bao giờ** trả file `_gzip` (giai đoạn 1).
+- Không có chế độ chạy thử, không đếm trước. Sửa xong thì S3 vẫn giữ bản cũ.
+- Điểm đúng, giữ lại: quét đệ quy (`rglob`), lấy `ver` = mtime của file tĩnh, xử lý cả URL có và chưa có `?ver=`.
+
+Số file hiện có (đếm 27/11): 60.850 `index-https.html` + 57.923 `index-mobile-https.html` + 2 loại `_gzip`, tổng **237.547 file**. Sau khi chỉ còn một bản HTML và không còn `_gzip` thì còn khoảng **61 nghìn file**.
+
+### Tool mới `dott-cache rewrite-assets` (Go, chạy trên VPS chính)
+Phải chạy trên VPS chính vì file cache nằm ở đó.
+1. **Đầu vào:** danh sách asset kèm `ver` mới. Ví dụ:
+   - `generatepress_child/style.css` → mtime;
+   - `generatepress_child/tt-core/core.js` → `ver` trong `core.manifest.json`;
+   - tương tự cho `generatepress_en`.
+
+   Có chế độ `--dry-run`: chỉ đếm số file sẽ đổi, in ví dụ 5 file.
+2. **Chỉ sửa `index*.html`**, bỏ qua `_gzip`. Nếu `_gzip` còn tồn tại thì xóa hoặc để WP Rocket tự tạo lại (chủ site quyết định).
+3. **Ghi file tạm trong cùng thư mục rồi `rename`**: thay một bước, không bao giờ có file ghi dở. Giữ owner và quyền như file cũ. Có tùy chọn giữ nguyên mtime (xem lưu ý về WP Rocket bên dưới).
+4. Chạy `nice -n 19`, `ionice -c3`, đọc và ghi tuần tự (1–2 luồng là đủ, vì giới hạn ở đĩa).
+5. **Đầu ra:** danh sách path đã đổi. Ghi vào bảng sự kiện `action = 'upload'` (theo lô, ví dụ 500 path mỗi INSERT). Pool trên VPS phụ upload lại lên mọi đích S3.
+6. Sau đó purge Cloudflare cho các URL asset (cả `?ver=` cũ lẫn mới).
+
+Lưu ý:
+- Đổi mtime file cache có thể làm WP Rocket tính lại thời hạn cache (cần kiểm tra trên php81). Nếu giữ mtime cũ thì header `Last-Modified` cũng giữ nguyên.
+- Thứ tự an toàn: deploy file tĩnh mới → chạy rewrite → upload S3 → purge Cloudflare.
 
 ## 6. Tự điều tiết theo tải VPS chính
 
@@ -335,6 +415,14 @@ dott-cache-management/
 | **7. Reconcile + report** | Chế độ chỉ báo cáo 2 tuần, sau đó cho tự sửa (có chặn ngưỡng). Nối `status --json` vào `/root/health` | Chỉ đọc (find hằng tuần) | Tắt timer |
 | **8. Dọn dẹp** | Thu hồi S3 key cũ trên VPS chính, dời code Python vào `legacy/`, cập nhật skill `vps-diaocthongthai` và `vps-claude-control` | Có (**hỏi trước**) | Khôi phục từ tag `v0-legacy` |
 
+## 14b. Môi trường test: php81.congtoan.net
+
+Chủ site (27/11): **chưa test trên site chính**. Mọi thử nghiệm dùng php81.congtoan.net. Site này là WordPress multisite dạng thư mục con, nằm **cùng VPS chính**, user `php81conZSI`.
+- Site 3 `/tttest/`: theme `generatepress_child` có tt-core, đóng vai site vi. Site 4 `/tttest-en/`: theme `generatepress_en`.
+- Mô phỏng site thật: chép các plugin chính từ diaocthongthai.com (WP Rocket, ct-multi-sticky-sidebar...) và khoảng 1.000 bài viết test.
+- Bucket S3 test riêng (Chicago và Frankfurt, chủ site tạo). **Không** dùng bucket `cdn.diaocthongthai.com` để test.
+- Vì cùng máy với production nên vẫn áp dụng quy tắc: hỏi trước các thao tác ghi ảnh hưởng chung, như **cấu hình nginx, PHP-FPM, cron**. Phần riêng của php81 (bài, plugin, theme) đã được chủ site cho phép.
+
 ## 15. Câu hỏi còn mở
 1. **Mục tiêu vòng renew nền:** 30 ngày (đề xuất) hay giữ khoảng 90 ngày? Với 60 nghìn URL, mỗi URL 2 lần render khoảng 3 s, một vòng 30 ngày cần khoảng 2.000 URL/ngày, tức khoảng 1,7 giờ render mỗi ngày.
 2. **Cảnh báo log gần thời gian thực** (mục 10.3): có cần không, hay bản phân tích 23:45 là đủ?
@@ -342,3 +430,7 @@ dott-cache-management/
 4. **S3 key và CF token mới, quyền hẹp:** chủ site tự tạo trên Linode/Cloudflare (đề xuất), hay dùng tạm key hiện tại?
 5. **Mở Netdata cho IP VPS phụ** khi khóa Netdata (TODO_VPS mục 2): đồng ý đưa vào giai đoạn 0? (Không cần cấu hình fail2ban, xem mục 4.)
 6. **Đồng bộ media sang AP** (F15): giữ ngoài hệ thống này (Media Cloud và `ct-media-s3-upload` đang lo), hay cần đưa phần đối soát media vào reconcile?
+7. **Ping tức thì từ VPS chính sang VPS phụ** (mục 5b): bật VPC nội bộ của Vultr, hay chỉ dùng polling 5–30 giây?
+8. **Miễn rate limit nginx cho IP VPS phụ** (mục 5b): đồng ý thì việc upload hàng loạt nhanh khoảng 5 lần.
+9. **Worker chọn đích S3 theo châu lục** (mục 5b): ngoài Bắc/Nam Mỹ → Chicago, châu Âu → Frankfurt, có thêm vùng nào không? Giá trị KV có ghi danh sách đích không?
+10. **`_gzip` trên đĩa** (mục 5c): khi rewrite thì xóa, hay để nguyên?
