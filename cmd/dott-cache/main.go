@@ -67,7 +67,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `dùng (thư mục gốc: $DOTT_CACHE_HOME, mặc định /root/tool/cache-system):
   dott-cache upload -site <domain> -paths paths.txt [-limit N] [-mobile-copy] [-log out.jsonl]
   dott-cache delete -site <domain> -paths paths.txt
-  dott-cache renew  -site <domain> (-url URL | -paths paths.txt) [-limit N] [-keep-s3] [-no-delete] [-log out.jsonl]
+  dott-cache renew  -site <domain> (-url URL | -paths paths.txt) [-mode auto|http|prefork] [-http-max 4] [-limit N] [-keep-s3] [-no-delete] [-log out.jsonl]
   -site <domain> dùng config/sites/<domain>.json; -config <file> thay cho -site. Không có -log thì ghi vào logs/<domain>/.`)
 	os.Exit(2)
 }

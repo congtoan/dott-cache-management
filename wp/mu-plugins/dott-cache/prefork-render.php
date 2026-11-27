@@ -15,7 +15,7 @@
  *   printf '/tttest/abc/\n' | dott-prefork php81.congtoan.net
  * Chạy tay:
  *   runuser -u php81conZSI -- php prefork-render.php --root=<public_html> --host=php81.congtoan.net \
- *       --urls=-|file [--parallel=1] [--readonly] [--no-delete] [--out=log.jsonl] [--limit=N]
+ *       --urls=-|file [--parallel=1] [--readonly] [--no-delete | --delete-only] [--out=log.jsonl] [--limit=N]
  *
  * Đầu vào (--urls, "-" nghĩa là stdin): mỗi dòng một path (/tttest/abc/) hoặc URL https://<host>/...
  * Có thể trộn nhiều blog trong cùng danh sách: path được xếp vào blog có path site dài nhất khớp với nó.
@@ -34,7 +34,7 @@ if ( PHP_SAPI !== 'cli' ) {
 	exit( 1 );
 }
 
-$opt = getopt( '', array( 'root:', 'host:', 'urls:', 'parallel::', 'readonly', 'no-delete', 'out::', 'limit::' ) );
+$opt = getopt( '', array( 'root:', 'host:', 'urls:', 'parallel::', 'readonly', 'no-delete', 'delete-only', 'out::', 'limit::' ) );
 foreach ( array( 'root', 'host', 'urls' ) as $k ) {
 	if ( empty( $opt[ $k ] ) ) {
 		fwrite( STDOUT, "# thiếu --$k\nDONE ok=0 fail=0 skip=0\n" );
@@ -97,6 +97,30 @@ $pf_paths = array_keys( $pf_paths );
 pf_line( sprintf( '# %d path hợp lệ, %d bị bỏ', count( $pf_paths ), $pf_skip ) );
 if ( ! $pf_paths ) {
 	pf_line( "DONE ok=0 fail=0 skip=$pf_skip" );
+	exit( $pf_skip ? 1 : 0 );
+}
+
+/* --delete-only: chỉ xóa file cache cũ, không nạp WordPress, chỉ mất vài ms. VPS phụ dùng chế độ
+ * này khi renew ít URL bằng HTTP: xóa file, rồi gửi GET để PHP-FPM render và WP Rocket tự ghi cache.
+ * Thư mục cache theo mặc định của WP Rocket: <root>/wp-content/cache/wp-rocket/<host>/<path>. */
+if ( isset( $opt['delete-only'] ) ) {
+	$base = $pf_root . '/wp-content/cache/wp-rocket/' . $pf_host;
+	if ( ! is_dir( $base ) ) {
+		pf_line( "# không thấy thư mục cache $base" );
+	}
+	$ok = 0;
+	foreach ( $pf_paths as $p ) {
+		$n = 0;
+		foreach ( PF_CACHE_FILES as $f ) {
+			if ( @unlink( $base . $p . $f ) ) {
+				$n++;
+			}
+		}
+		pf_result( array( 'path' => $p, 'ok' => true, 'deleted' => $n ) );
+		$ok++;
+	}
+	@rmdir( $pf_tmp );
+	pf_line( "DONE ok=$ok fail=0 skip=$pf_skip" );
 	exit( $pf_skip ? 1 : 0 );
 }
 

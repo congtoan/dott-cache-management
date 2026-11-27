@@ -279,5 +279,34 @@ Mục đích: mô phỏng diaocthongthai.com để test tt-core, cache một b�
   - Log tự ghi vào `logs/php81.congtoan.net/renew-<thời gian>.jsonl`.
 - **Lỗi của Claude khi sửa tài liệu (đã khôi phục, chưa commit):** một lệnh PowerShell thay chuỗi hàng loạt bị tách cặp thay thế thành từng ký tự, và thay mọi chữ "S" thành "c" trong `findings-php-render`. Đã khôi phục từ git rồi sửa lại bằng Edit.
 
+### `renew -mode auto|http|prefork` và phát hiện nginx `open_file_cache` (28/11)
+- **Chế độ:**
+  - `auto` (mặc định): tối đa `-http-max` (4) URL thì dùng `http`, nhiều hơn thì dùng `prefork`.
+  - `http`: chạy `dott-prefork <domain> --delete-only` (PHP chỉ `unlink`, không nạp WordPress, không chờ khóa), rồi GET để PHP-FPM render như khách thật và WP Rocket tự ghi cache.
+  - `prefork`: URL nào lỗi (không phải 404 hay path sai) thì tự thử lại bằng HTTP.
+  - Một path chỉ tính là xong khi fetch ok và upload ok lên **mọi** đích.
+- **Số đo trên php81:**
+
+| Test | Kết quả |
+|---|---|
+| 1 URL, http | 3,0 s: xóa trên đĩa 0,4 s, render qua HTTP 1,2 s |
+| 1 URL, prefork | 2,8 s |
+| 30 URL, http | 28,9 s (khoảng 0,85 s/URL vì php81 không có Redis) |
+| 30 URL, prefork | 7,3 s |
+| 6 URL có 404 | Cả 2 chế độ báo đúng 404, không thử lại bằng HTTP |
+
+  Kết luận: với vài URL, 2 cách ngang nhau; từ khoảng 5 URL trở lên, prefork nhanh hơn rõ. Ngưỡng 4 giữ nguyên cho tới khi đo trên production.
+- **Phát hiện: nginx trả bản cache CŨ sau khi file đã bị xóa hoặc thay mới.**
+  - `/etc/nginx/nginx.conf` có `open_file_cache max=2000 inactive=20s; open_file_cache_valid 120s; open_file_cache_min_uses 2;`. URL nào vừa được đọc từ 2 lần trở lên trong 20 s thì nginx giữ file handle cũ, tới 120 s mới kiểm lại.
+  - Đã tái hiện:
+    - GET 2 lần;
+    - `--delete-only` báo `deleted:2`, thư mục đã trống;
+    - GET lần nữa vẫn nhận `HIT` với `cached@` cũ.
+  - Trên php81, renew prefork rồi renew http ngay sau đó: 5/5 URL bị trả bản cũ.
+  - **Hậu quả nếu không chặn:** tool upload bản cũ lên S3, và khách thấy bản cũ tới 2 phút. Nếu chỉ tắt `open_file_cache` trong `location`, phép `if (-f …)` ở cấp server vẫn dùng cache, nên sau khi xóa nginx sẽ trả 404.
+  - **Đã chặn ở tool:** `origin.MinCachedAt`. renew chỉ nhận bản có `cached@` >= thời điểm bắt đầu trừ 5 s. Bản cũ thì thử lại 3 lần, sau đó báo lỗi "origin vẫn trả bản cache cũ… open_file_cache" và **không upload**. Đã test: 5 URL bị chặn đúng.
+  - **Cách sửa gốc (chờ chủ site đồng ý, vì file dùng chung cho production):** thêm `open_file_cache off;` ở đầu `/etc/nginx/extra/rocket-page-cache.conf` (cấp server, áp dụng cho cả `if -f` lẫn `location`), sau đó `nginx -t` và reload.
+  - Production hiện chưa bị ảnh hưởng: thư mục cache còn `.mobile-active`, nên request vẫn đi qua PHP.
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.

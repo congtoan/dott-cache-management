@@ -12,6 +12,11 @@ package main
 //     đọc path từ stdin). prefork-render.php của site xóa file cache cũ của từng URL ngay trước khi
 //     render URL đó, và bootstrap WordPress một lần cho mỗi blog.
 //  3. Path nào prefork báo ok thì lấy HTML qua HTTP (lúc này nginx trả file vừa tạo) và upload lên mọi đích.
+//
+// -mode auto (mặc định): tối đa -http-max URL (mặc định 4) thì dùng "http", nhiều hơn thì dùng "prefork".
+//   http:    bước 2 chỉ xóa file cache cũ (dott-prefork --delete-only, không nạp WordPress), bước 3 gửi
+//            GET để PHP-FPM render như khách thật và WP Rocket tự ghi cache. Không phải chờ khóa prefork.
+//   prefork: như trên; URL nào prefork lỗi (không phải 404 hay path sai) thì tự thử lại bằng HTTP.
 
 import (
 	"bufio"
@@ -22,6 +27,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -46,6 +52,8 @@ func cmdRenew(args []string) {
 	limit := fs.Int("limit", 0, "chỉ xử lý N path đầu")
 	keepS3 := fs.Bool("keep-s3", false, "không xóa object cũ trên S3 trước (upload sẽ ghi đè)")
 	logPath := fs.String("log", "", "ghi kết quả từng bước ra file JSONL")
+	mode := fs.String("mode", "auto", "auto | http | prefork. auto: tối đa -http-max URL thì dùng http, nhiều hơn thì dùng prefork")
+	httpMax := fs.Int("http-max", 4, "ngưỡng của -mode auto")
 	fs.Parse(args)
 
 	if (*url == "") == (*pathsFile == "") {
@@ -53,9 +61,6 @@ func cmdRenew(args []string) {
 	}
 	cfg, clients := setup(resolveConfig(*cfgPath, *site))
 	*logPath = defaultLog(*logPath, *site, "renew")
-	if *noDelete {
-		cfg.Renew.Command += " --no-delete"
-	}
 	var paths []string
 	if *url != "" {
 		if err := checkLine(*url, cfg.Origin.Host); err != nil {
@@ -71,12 +76,27 @@ func cmdRenew(args []string) {
 	if cfg.Renew.SSHHost == "" || cfg.Renew.Command == "" {
 		die("config thiếu renew.ssh_host / renew.command")
 	}
+	m := *mode
+	switch m {
+	case "auto":
+		m = "prefork"
+		if len(paths) <= *httpMax {
+			m = "http"
+		}
+	case "http", "prefork":
+	default:
+		die("-mode phải là auto, http hoặc prefork")
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	col := newCollector(*logPath)
 	start := time.Now()
-	fmt.Printf("renew %d path, host %s, %d đích (%s)\n", len(paths), cfg.Origin.Host, len(clients), targetsDesc(cfg.Targets))
+	if !*noDelete {
+		// Chỉ nhận bản cache tạo trong lần renew này (trừ 5 s phòng lệch đồng hồ giữa 2 VPS).
+		cfg.Origin.MinCachedAt = start.Unix() - 5
+	}
+	fmt.Printf("renew %d path (mode %s), host %s, %d đích (%s)\n", len(paths), m, cfg.Origin.Host, len(clients), targetsDesc(cfg.Targets))
 
 	// 1. Xóa S3.
 	if !*keepS3 {
@@ -87,19 +107,52 @@ func cmdRenew(args []string) {
 		fmt.Println("[1/3] giữ object S3 cũ (-keep-s3)")
 	}
 
-	// 2. Prefork trên VPS chính.
+	// 2. Tạo cache mới trên VPS chính.
+	//    prefork: một lệnh ssh, PHP xóa cache cũ từng URL rồi render ngay.
+	//    http:    một lệnh ssh chỉ xóa file (--delete-only), rồi bước 3 gửi GET: PHP-FPM render như
+	//             khách thật và WP Rocket tự ghi cache (origin.Get thấy chưa có cached@ thì GET lại).
 	t := time.Now()
-	okPaths, err := runRemotePrefork(ctx, cfg.Renew, paths, col.ch)
-	if err != nil {
-		col.finish()
-		die("prefork: %v", err)
+	var toFetch []string
+	switch {
+	case m == "http" && *noDelete:
+		toFetch = paths
+		fmt.Println("[2/3] giữ file cache cũ trên VPS chính (-no-delete): chỉ upload lại bản đang có")
+	case m == "prefork":
+		cmd := cfg.Renew.Command
+		if *noDelete {
+			cmd += " --no-delete"
+		}
+		ok, failed, err := runRemote(ctx, cfg.Renew.SSHHost, cmd, "prefork", paths, col.ch)
+		if err != nil {
+			col.finish()
+			die("prefork: %v", err)
+		}
+		toFetch = ok
+		// Dự phòng: URL prefork lỗi (không phải 404 hay path sai) thì thử lại bằng HTTP. Prefork đã
+		// xóa file cũ của URL đó trước khi render, nên GET sẽ để PHP-FPM render lại.
+		var retry []string
+		for p, e := range failed {
+			if retryableByHTTP(e) {
+				retry = append(retry, p)
+			}
+		}
+		sort.Strings(retry)
+		toFetch = append(toFetch, retry...)
+		fmt.Printf("[2/3] prefork: %d/%d ok, %d URL lỗi sẽ thử lại bằng HTTP, %.1f s\n", len(ok), len(paths), len(retry), time.Since(t).Seconds())
+	default: // http
+		ok, _, err := runRemote(ctx, cfg.Renew.SSHHost, cfg.Renew.Command+" --delete-only", "disk-delete", paths, col.ch)
+		if err != nil {
+			col.finish()
+			die("xóa cache trên VPS chính: %v", err)
+		}
+		toFetch = ok
+		fmt.Printf("[2/3] xóa file cache cũ trên VPS chính: %d/%d path, %.1f s\n", len(ok), len(paths), time.Since(t).Seconds())
 	}
-	fmt.Printf("[2/3] prefork: %d/%d ok, %.1f s\n", len(okPaths), len(paths), time.Since(t).Seconds())
 
-	// 3. Lấy HTML qua HTTP, upload.
+	// 3. Lấy HTML qua HTTP (render nếu chưa có cache), upload.
 	t = time.Now()
-	if len(okPaths) > 0 {
-		runUpload(ctx, cfg, okPaths, []string{"index-https.html"}, clients, col.ch)
+	if len(toFetch) > 0 {
+		runUpload(ctx, cfg, toFetch, []string{"index-https.html"}, clients, col.ch)
 	}
 	fmt.Printf("[3/3] lấy HTML và upload: %.1f s\n", time.Since(t).Seconds())
 
@@ -108,7 +161,7 @@ func cmdRenew(args []string) {
 		fmt.Printf("log: %s\n", *logPath)
 	}
 	summary(all, time.Since(start), cfg.Targets)
-	if bad := failedPaths(all); len(bad) > 0 {
+	if bad := failedPaths(paths, all, len(clients)); len(bad) > 0 {
 		fmt.Printf("\n%d path chưa xong:\n", len(bad))
 		for i, p := range bad {
 			if i >= 20 {
@@ -121,20 +174,21 @@ func cmdRenew(args []string) {
 	}
 }
 
-// runRemotePrefork chạy lệnh renew trên VPS chính qua ssh, gửi path qua stdin, đọc kết quả dạng
-// "R {json}" / "# log" / "DONE ...". Trả về các path prefork đã ghi cache thành công.
-func runRemotePrefork(ctx context.Context, rc RenewConfig, paths []string, results chan<- result) ([]string, error) {
-	cmd := exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", rc.SSHHost, rc.Command)
+// runRemote chạy dott-prefork trên VPS chính qua ssh, gửi path qua stdin, đọc kết quả dạng
+// "R {json}" / "# log" / "DONE ...". Trả về path thành công và path lỗi (kèm lý do).
+func runRemote(ctx context.Context, host, command, stage string, paths []string, results chan<- result) ([]string, map[string]string, error) {
+	cmd := exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", host, command)
 	cmd.Stdin = strings.NewReader(strings.Join(paths, "\n") + "\n")
 	cmd.Stderr = os.Stderr
 	out, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := cmd.Start(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var ok []string
+	failed := map[string]string{}
 	done := false
 	sc := bufio.NewScanner(out)
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
@@ -147,10 +201,11 @@ func runRemotePrefork(ctx context.Context, rc RenewConfig, paths []string, resul
 				fmt.Fprintf(os.Stderr, "    dòng lạ từ VPS chính: %s\n", l)
 				continue
 			}
-			r := result{Path: p.Path, Stage: "prefork", OK: p.OK, Ms: p.Ms, Bytes: p.Bytes, Err: p.Err}
-			results <- r
+			results <- result{Path: p.Path, Stage: stage, OK: p.OK, Ms: p.Ms, Bytes: p.Bytes, Err: p.Err}
 			if p.OK {
 				ok = append(ok, p.Path)
+			} else {
+				failed[p.Path] = p.Err
 			}
 		case strings.HasPrefix(l, "DONE"):
 			done = true
@@ -161,21 +216,42 @@ func runRemotePrefork(ctx context.Context, rc RenewConfig, paths []string, resul
 	}
 	werr := cmd.Wait()
 	if !done {
-		return ok, fmt.Errorf("lệnh trên VPS chính dừng giữa chừng (%v)", werr)
+		return ok, failed, fmt.Errorf("lệnh trên VPS chính dừng giữa chừng (%v)", werr)
 	}
-	return ok, nil
+	return ok, failed, nil
 }
 
-// failedPaths: path có bước prefork, fetch hoặc put bị lỗi (bước delete lỗi không tính).
-func failedPaths(all []result) []string {
-	seen := map[string]bool{}
-	var out []string
+// retryableByHTTP: lỗi prefork nào đáng thử lại bằng HTTP. 404 và path sai thì HTTP cũng không cứu được.
+func retryableByHTTP(err string) bool {
+	for _, s := range []string{"404", "không hợp lệ", "không phải host", "không có WP Rocket"} {
+		if strings.Contains(err, s) {
+			return false
+		}
+	}
+	return true
+}
+
+// failedPaths: path chỉ tính là xong khi lấy được HTML (fetch ok) và upload ok lên MỌI đích.
+// Cách đếm này đúng cả khi prefork lỗi nhưng thử lại bằng HTTP thành công.
+func failedPaths(paths []string, all []result, nTargets int) []string {
+	fetched := map[string]bool{}
+	puts := map[string]int{}
 	for _, r := range all {
-		if r.OK || r.Stage == "delete" || seen[r.Path] {
+		if !r.OK {
 			continue
 		}
-		seen[r.Path] = true
-		out = append(out, r.Path)
+		switch r.Stage {
+		case "fetch":
+			fetched[r.Path] = true
+		case "put":
+			puts[r.Path]++
+		}
+	}
+	var out []string
+	for _, p := range paths {
+		if !fetched[p] || puts[p] < nTargets {
+			out = append(out, p)
+		}
 	}
 	return out
 }

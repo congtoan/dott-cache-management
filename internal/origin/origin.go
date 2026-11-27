@@ -25,6 +25,11 @@ type Config struct {
 	SPKIPin   string `json:"spki_pin"`   // base64 sha256 public key; rỗng = kiểm tra CA thông thường
 	UserAgent string `json:"user_agent"` // UA desktop
 	Workers   int    `json:"workers"`    // số request đồng thời tới origin
+
+	// MinCachedAt (unix, không đọc từ JSON): nếu > 0 thì bản cache phải có cached@ >= giá trị này.
+	// renew đặt bằng thời điểm bắt đầu: nginx bật open_file_cache nên sau khi file bị xóa/thay,
+	// nginx có thể vẫn trả bản CŨ tới 120 s (đo 28/11). Không kiểm thì sẽ upload bản cũ lên S3.
+	MinCachedAt int64 `json:"-"`
 }
 
 // Fetcher giữ một http.Client keep-alive tới origin.
@@ -93,14 +98,20 @@ type Doc struct {
 func (f *Fetcher) Get(ctx context.Context, path string) (*Doc, error) {
 	start := time.Now()
 	d := &Doc{Path: path}
+	var stale int64
 	for attempt := 0; attempt < 3; attempt++ {
 		body, served, err := f.get(ctx, path)
 		if err != nil {
 			return nil, err
 		}
 		if m := cachedRe.FindSubmatch(tailOf(body, 300)); m != nil {
-			d.Body, d.Served = body, served
-			d.CachedAt, _ = strconv.ParseInt(string(m[1]), 10, 64)
+			at, _ := strconv.ParseInt(string(m[1]), 10, 64)
+			if f.cfg.MinCachedAt > 0 && at < f.cfg.MinCachedAt {
+				stale = at // bản cũ: thử lại, hết lượt thì báo lỗi (không upload)
+				time.Sleep(time.Duration(500*(attempt+1)) * time.Millisecond)
+				continue
+			}
+			d.Body, d.Served, d.CachedAt = body, served, at
 			d.Duration = time.Since(start)
 			if err := validate(body); err != nil {
 				return nil, fmt.Errorf("%s: %w", path, err)
@@ -109,6 +120,9 @@ func (f *Fetcher) Get(ctx context.Context, path string) (*Doc, error) {
 		}
 		d.Rendered = true
 		time.Sleep(time.Duration(200*(attempt+1)) * time.Millisecond)
+	}
+	if stale > 0 {
+		return nil, fmt.Errorf("%s: origin vẫn trả bản cache cũ (cached@%d, cần >= %d), có thể do nginx open_file_cache", path, stale, f.cfg.MinCachedAt)
 	}
 	return nil, fmt.Errorf("%s: sau 3 lần vẫn chưa có bản cache (không thấy cached@)", path)
 }
