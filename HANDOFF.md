@@ -50,9 +50,10 @@ Chạy `dott-cache` không tham số để xem đủ cờ.
 | Theme | **vi: generatepress_child v0.7.0 có tt-core, đã build (28/11 16:58, P2 xong).** Bản render mới dùng một `core.js` cho desktop và mobile. en: chưa có tt-core. Backup `/root/backup-p2-2026-11-28/` |
 | Plugin sticky | **3.2.0 (P3 xong)**; module trong build tt-core của vi; en chạy như cũ |
 | 8 bài vi test | Đã xóa cache trên server rồi tạo lại bằng prefork: chỉ còn `.html` và `_gzip`, nginx trả HIT cho cả mobile. Khách mobile của 8 bài này nhận JS desktop cho tới P2. Danh sách: `test/t8-prod/list.txt` trên VPS phụ |
-| Cron cũ | `cron-cache-clean-v2.py` (phút 10 các giờ 0, 4, 8, 12, 16, 20), `cron-cache-segment-update-v2.py` (3:45, 15:45): **vẫn bật** |
-| Config `config/sites/diaocthongthai.com.json` (VPS phụ) | Đích Chicago `cdn.diaocthongthai.com`, KV `cc831…`. **`write_blogs: ["-"]`: chưa cho ghi blog nào** |
-| Worker production | Vẫn là v7. Worker v2 (`deploy/worker/dott-cache-worker.js`) đã test trên workers.dev |
+| Config `config/sites/diaocthongthai.com.json` (VPS phụ) | Đích Chicago `cdn.diaocthongthai.com`, KV `cc831…` |
+| Worker production | **v2 từ 28/11 17:45** (script `thongthai-cache`, route `diaocthongthai.com/*`): NA/SA → S3 Chicago, `LEGACY_PREFIXES ["/en/"]`. Quay lại v7: `deploy/worker/deploy-production.sh rollback` (bản v7 ở VPS phụ `test/p7/v7-live/`) |
+| Cron cũ, screen | **Đã xóa / đóng (P5, 28/11).** Backup crontab `/root/backup-p5-2026-11-28/` |
+| Config VPS phụ | `write_blogs: ["/"]` (P6) |
 | KV production | 60.687 key, không còn key dạng URL đầy đủ |
 
 ## 4. Việc tiếp theo (theo thứ tự)
@@ -61,7 +62,9 @@ Chạy `dott-cache` không tham số để xem đủ cờ.
 1. ~~P2~~ xong 28/11 (rollout-log "P2 + P3 production site vi").
 2. ~~P3~~ xong 28/11.
 3. ~~P4~~ xong 28/11 17:05 (rollout-log "P4 production site vi"). Thư mục còn `.mobile-active` giờ được PHP trả **bản desktop cũ (JS desktop cũ)** cho khách mobile, cho tới khi cache được tạo lại ở P6, nên **nên làm P5–P7 sớm**.
-4. **P5 (kế tiếp):** tắt phần vi của 2 cron cũ (hoặc tắt hẳn nếu chấp nhận en không còn cron cũ). Dừng các screen sót (`en-map-of`, `F1`, `F2`).
+4. ~~P5~~ xong 28/11 17:10. ~~P6~~ chạy từ 17:12 (xem rollout-log). ~~P7~~ xong 28/11 17:45. **Kế tiếp: P8** (bật pool cho production thay timer cũ) sau khi P6 xong và kiểm tra.
+   Nội dung gốc của các bước (để tra cứu):
+   **P5:** tắt phần vi của 2 cron cũ (hoặc tắt hẳn nếu chấp nhận en không còn cron cũ). Dừng các screen sót (`en-map-of`, `F1`, `F2`).
 5. **P6:**
    - Đổi config VPS phụ thành `write_blogs: ["/"]`.
    - `dott-cache urls sync -site diaocthongthai.com` (cần `export-urls.php` ở P4).

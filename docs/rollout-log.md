@@ -724,5 +724,33 @@ Dữ liệu test để lại trên php81: excerpt của bài 150 có chữ "t0�
   4. Error log PHP: không có lỗi mới.
 - **Quay lại:** chép `/root/backup-p4-2026-11-28/wp-rocket-config/diaocthongthai.com.php` đè lên, đợi 3 phút. Lưu thiết lập WP Rocket trong admin site vi sẽ tạo lại file theo option hiện tại (`do_caching_mobile_files=0` chừng nào mu-plugin còn bật cho blog 1).
 
+### P5 production: xóa cron cũ, dừng screen (28/11 17:10, chủ site yêu cầu "dừng hết và xóa cron")
+- Backup `/root/backup-p5-2026-11-28/crontab-root.txt`. Xóa 2 dòng `cron-cache-clean-v2.py` (10 phút sau các giờ 0,4,…,20) và `cron-cache-segment-update-v2.py` (3:45, 15:45). Cả hai chỉ xử lý URL vi (danh sách `clean_*.txt` 1.074 URL vi; segment viết cứng URL vi).
+- Dừng lượt `cron-cache-clean-v2.py` đang chạy (từ 16:10). Đóng screen `en-map-of` (tool đã xong 27/11 16:31: 33.077/33.079, 2 lỗi), `F1`, `F2` (chỉ còn shell).
+- Giữ cron "Listing cache" của theme (2:20, 10:20, 18:20): không thuộc hệ cache.
+
+### P6 production site vi: update -all -blog / (28/11 17:12, chủ site yêu cầu)
+- Config VPS phụ `write_blogs: ["/"]` (backup `config/sites/diaocthongthai.com.json.bak-…`). `urls sync` toàn bộ: 61.170 URL, không thêm, không mất (18 s).
+- Kiểm kê: 24.273 URL blog 1; S3 72.089 file kiểu cũ + 38 file mồ côi; KV 9 key mồ côi; server 66.549 file mobile + 222 file mồ côi (111 path, 0,46%); 2.022 URL chưa có cache.
+- Chạy bằng `systemd-run --unit=dott-p6-vi` (MemoryMax 400M, CPUQuota 50%); log `logs/diaocthongthai.com/p6-update-all-vi.txt`.
+- Dọn: KV 9 key; server 66.549 mobile + 222 mồ côi (11 s); S3 72.127 object (41 s), không lỗi.
+- Render: lô 200 URL khoảng 72 s (2,8 URL/s), lô đầu nghỉ 90 s vì load. Thứ tự (đo trên log): trang chủ `/` (trang tĩnh), 21.293 bài, 792 archive trang 1, 2.188 phân trang.
+- Kiểm tra một URL đã render (`/ban-do-an-do/`): server chỉ còn `index-https.html` + `_gzip`; nginx HIT cùng bản cho desktop và iPhone, có `core.js`; S3 chỉ còn HTML mới (mobile, `_gzip` 403).
+- Kết quả cuối: xem mục sau khi chạy xong.
+
+### P7 production: Worker v2 thay v7 (28/11 17:45, chủ site yêu cầu "deploy ngay")
+- Lý do phải làm ngay: v7 chọn file theo `Accept-Encoding` và User-Agent, nên gần như luôn đọc `index[-mobile]-https.html_gzip`. P6 đã xóa các file này của site vi, nên với v7 mỗi trang vi = KV + một lần gọi S3 hỏng + origin.
+- **Cloudflare (chỉ đọc trước):** script `thongthai-cache` trên route `diaocthongthai.com/*` (`cdn.diaocthongthai.com/*` → `thongthai-cdn`, không đụng). v7: một binding `THONGTHAI_CACHE` (namespace `cc831…`), compat 2025-09-06.
+- **Bản quay lại:** mã v7 đang chạy được tải về `test/p7/v7-live/worker.js` (9.043 byte). `bash deploy/worker/deploy-production.sh rollback` upload lại v7 với binding cũ.
+- **Deploy:** `deploy-production.sh deploy`: upload v2 đè lên `thongthai-cache` (route giữ nguyên, không cần quyền Routes): `CACHE` = `cc831…`, `REDIRECTS=1`, `LEGACY_PREFIXES=["/en/"]`, `TARGETS` NA + SA = bucket Chicago `cdn.diaocthongthai.com`, `TEST_KEY` (secret), compat 2026-11-01.
+- **Test qua Cloudflare:**
+  - vi NA desktop / NA iPhone / SA: `S3-NA` / `S3-NA` / `S3-SA`, cùng một bản (`core.js`);
+  - châu Á (VPS phụ), châu Âu giả lập: `ORIGIN-region-AS/EU`; header giả lập với key sai: bị bỏ qua;
+  - cookie đăng nhập: `ORIGIN-cookie`; query string: `ORIGIN-query`; chữ hoa: 301 về chữ thường;
+  - en: NA desktop `S3-NA-legacy`, NA iPhone `S3-NA-legacy-mobile` (như v7);
+  - `/tag/` → `/tags/` 301, `link_ds_*` 410, ảnh uploads → `cdn.diaocthongthai.com` 301, `/map-*` → `/en/map-*` 301, `wp-login.php` và `/en/wp-json/` đi origin (`ORIGIN-bypass`).
+  - POST `admin-ajax.php` qua Cloudflare: 403 do **trang chặn của Cloudflare** (WAF/bot, trước Worker); thẳng origin: 200. Không liên quan Worker.
+- Chưa đo: tốc độ thực tế cho khách Việt Nam (v7 cho mọi châu lục lấy từ Chicago; v2 cho châu Á vào origin, nơi nginx trả thẳng file cache).
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.
