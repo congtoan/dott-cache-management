@@ -54,7 +54,9 @@ dott-cache urls sync|list|stats ...; update -all|-url|-txt|-segment ... -blog / 
 
 **Site en (blog 2), lần 2 đang làm (28/11 18:14–18:33, rollout-log mục "Lần 2 site en"):**
 - Bước 1–4 xong: theme `generatepress_en` v0.7.0 (build `1cc3bb7b7f`, 9 module, backup `/root/backup-en-2026-11-28/`); `DOTT_SINGLE_CACHE_BLOGS = array( 1, 2 )`; config WP Rocket `.en` tạo lại (`do_caching_mobile_files=0`); Worker **bỏ `LEGACY_PREFIXES`** (18:30).
-- **Bước 5 chưa làm** (chờ P6 vi xong): `write_blogs: ["/", "/en/"]`, `urls sync`, `update -all -blog /en/` (kiểm kê không `-yes` trước, rồi chạy nền `dott-update-en`). Tới lúc đó S3/đĩa en còn bản cũ 21/11 kiểu tách mobile: khách mobile nhận bản desktop cũ.
+- P6 vi xong 20:18 (24.272/24.273; `/cong-bo-du-an-the-western-capital/` bị Rank Math redirect 301, chờ chủ site chọn bỏ redirect hay `exclude`).
+- **`export-urls.php` đã sửa trên production (20:53):** số trang archive tính bằng truy vấn chính (trước đây thiếu phân trang của chuyên mục cha: en 2.464 trang, vi 75); `--ids` trả thêm chuyên mục cha. 75 trang vi đã render. **php81 chưa cập nhật bản này.**
+- **Bước 5 đang chạy nền** từ 20:57: `write_blogs: ["/", "/en/"]`, unit `dott-update-en`, 39.361 URL / 197 lô, log `logs/diaocthongthai.com/update-all-en-20261128-2057.txt`, tiến độ `bash test/en-status.sh`. Dự kiến 4–5 giờ. Khi xong: đọc cuối log, `reconcile -blog /en/ -dry-run`, kiểm tra vài URL (HIT 2 UA, `core.js?ver=1cc3bb7b7f`, S3 không còn mobile/`_gzip`), ghi rollout-log, rồi P8 cho cả 2 blog.
 
 **VPS phụ:**
 - `dott-cache-serve.service` (`-sites php81.congtoan.net`) và `dott-cache-tunnel.service` đang chạy, **chưa enable**.

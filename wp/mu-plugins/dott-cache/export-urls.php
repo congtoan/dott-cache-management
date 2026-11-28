@@ -15,7 +15,8 @@
  *
  * Xuất ra:
  *   - bài đơn (mọi post type public, trừ attachment) đang publish;
- *   - archive của mọi taxonomy public, kèm phân trang /page/N/ (N = ceil(count / posts_per_page));
+ *   - archive của mọi taxonomy public, kèm phân trang /page/N/ (N = max_num_pages của truy vấn chính, xem
+ *     ex_term_pages(): gồm bài của term con và post type do theme chèn vào, không dùng term->count);
  *   - archive của post type có has_archive, kèm phân trang;
  *   - trang chủ của blog.
  * Lọc (taxonomy nào, exclude_patterns) làm ở VPS phụ theo config, để đổi quy tắc không phải sửa site.
@@ -53,7 +54,8 @@ foreach ( array_filter( explode( ',', (string) ( $opt['terms'] ?? '' ) ) ) as $t
 }
 // --ids=BLOG:pID,BLOG:t:TAXONOMY:ID,...: trạng thái HIỆN TẠI của các bài / term vừa đổi (dott-cache serve).
 // Mỗi mục trả các dòng U có thêm "q" (mục được hỏi):
-//   bài còn publish: bài (k=single), trang 1 của mọi term public của bài (k=term, "pages"=số trang), trang chủ;
+//   bài còn publish: bài (k=single), trang 1 của mọi term public của bài VÀ term tổ tiên (chuyên mục cha)
+//     (k=term, "pages"=số trang), trang chủ;
 //   term còn (count > 0): trang 1 (k=term, "pages");
 //   không còn: {"k":"gone"}.
 $ex_ids = array(); // blog_id => list of [kind, tax, id, q]
@@ -175,15 +177,91 @@ function ex_out( array $r ) {
 	ex_line( 'U ' . json_encode( $r, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ) );
 }
 
+/**
+ * Số trang của archive một term, đúng như WordPress phục vụ cho khách.
+ *
+ * KHÔNG dùng ceil(term->count / posts_per_page): term->count chỉ đếm bài gắn TRỰC TIẾP vào term, còn archive
+ * chuyên mục cha hiện cả bài của chuyên mục con, và theme có hook pre_get_posts (chỉ cho truy vấn chính) chèn
+ * thêm post type vào archive. Đo 28/11 trên production: en map-of-us-cities-and-places count 0 → export 1 trang,
+ * thật 2.465 trang; vi tu-lieu 1 → 67; vi ban-tin 1 → 10 (cách "include_children + post_type any" ra 11, sai).
+ *
+ * Cách làm: dựng truy vấn CHÍNH như WordPress làm cho URL archive (đặt tạm $wp_the_query, nên is_main_query()
+ * = true và mọi hook của theme/plugin chạy như khi khách mở trang), lấy max_num_pages, rồi trả lại như cũ.
+ * Chỉ lấy ID (một query LIMIT + FOUND_ROWS). Đo: 788 term vi 1,6 s, 68 term en 0,8 s.
+ */
+$ex_pages_diff = array(); // term có số trang khác ceil(count/ppp), để in ra log
+function ex_term_pages( $t, $ppp ) {
+	global $wp_the_query, $wp_query, $ex_pages_diff;
+	$naive = max( 1, (int) ceil( $t->count / $ppp ) );
+	$tax   = get_taxonomy( $t->taxonomy );
+	if ( 'category' === $t->taxonomy ) {
+		$vars = array( 'cat' => (int) $t->term_id );
+	} elseif ( 'post_tag' === $t->taxonomy ) {
+		$vars = array( 'tag_id' => (int) $t->term_id );
+	} elseif ( $tax && ! empty( $tax->query_var ) ) {
+		$vars = array( $tax->query_var => $t->slug );
+	} else {
+		return $naive;
+	}
+	$saved_the = $wp_the_query;
+	$saved     = $wp_query;
+	$q         = new WP_Query();
+	$wp_the_query = $wp_query = $q; // phpcs:ignore
+	try {
+		$q->query( $vars + array( 'fields' => 'ids', 'update_post_meta_cache' => false, 'update_post_term_cache' => false ) );
+		$pages = max( 1, (int) $q->max_num_pages );
+	} catch ( \Throwable $e ) {
+		$pages = $naive;
+	} finally {
+		$wp_the_query = $saved_the; // phpcs:ignore
+		$wp_query     = $saved; // phpcs:ignore
+	}
+	if ( $pages !== $naive ) {
+		$ex_pages_diff[ $t->taxonomy . ':' . $t->slug ] = "$naive→$pages";
+	}
+	return $pages;
+}
+function ex_pages_diff_line() {
+	global $ex_pages_diff, $blog_id;
+	if ( $ex_pages_diff ) {
+		$s = array();
+		foreach ( $ex_pages_diff as $k => $v ) {
+			$s[] = "$k $v";
+		}
+		ex_line( sprintf( '# blog %d: %d term có số trang khác ceil(count/ppp): %s', $blog_id, count( $s ), implode( ', ', array_slice( $s, 0, 20 ) ) ) );
+	}
+}
+
 // ---- Chế độ --ids ----
 if ( $ex_ids ) {
-	$t_item = function ( $t, $q ) use ( $blog_id, $ppp ) {
+	$t_seen = array(); // "q|term_id": mỗi term một dòng cho mỗi mục được hỏi
+	$t_item = function ( $t, $q ) use ( $blog_id, $ppp, &$t_seen ) {
+		if ( isset( $t_seen[ $q . '|' . $t->term_id ] ) ) {
+			return;
+		}
+		$t_seen[ $q . '|' . $t->term_id ] = true;
 		$base = ex_path( get_term_link( $t ) );
 		if ( null === $base ) {
 			return;
 		}
 		ex_out( array( 'p' => $base, 'b' => $blog_id, 'k' => 'term', 't' => $t->taxonomy, 'id' => (int) $t->term_id, 'pg' => 1,
-			'pages' => max( 1, (int) ceil( $t->count / $ppp ) ), 'q' => $q ) );
+			'pages' => ex_term_pages( $t, $ppp ), 'q' => $q ) );
+	};
+	// Term của bài + mọi term tổ tiên: archive chuyên mục cha hiện cả bài của chuyên mục con, nên cũng đổi.
+	$with_ancestors = function ( array $ts ) {
+		$out = array();
+		foreach ( $ts as $t ) {
+			$out[ $t->term_id ] = $t;
+			if ( is_taxonomy_hierarchical( $t->taxonomy ) ) {
+				foreach ( get_ancestors( $t->term_id, $t->taxonomy, 'taxonomy' ) as $aid ) {
+					$a = get_term( $aid, $t->taxonomy );
+					if ( $a && ! is_wp_error( $a ) ) {
+						$out[ $a->term_id ] = $a;
+					}
+				}
+			}
+		}
+		return array_values( $out );
 	};
 	$home = false;
 	foreach ( $ex_ids[ $blog_id ] ?? array() as list( $kind, $tax, $id, $q ) ) {
@@ -204,7 +282,7 @@ if ( $ex_ids ) {
 					continue;
 				}
 				$ts = get_the_terms( $post, $to->name );
-				foreach ( ( $ts && ! is_wp_error( $ts ) ) ? $ts : array() as $t ) {
+				foreach ( $with_ancestors( ( $ts && ! is_wp_error( $ts ) ) ? $ts : array() ) as $t ) {
 					$t_item( $t, $q );
 				}
 			}
@@ -223,6 +301,7 @@ if ( $ex_ids ) {
 	if ( $home && ( $hp = ex_path( home_url( '/' ) ) ) ) {
 		ex_out( array( 'p' => $hp, 'b' => $blog_id, 'k' => 'home', 't' => '', 'id' => 0, 'pg' => 1, 'q' => 'home' ) );
 	}
+	ex_pages_diff_line();
 	ex_line( sprintf( '# blog %d: --ids %d mục, %d dòng, boot %d ms, %.2f s',
 		$blog_id, count( $ex_ids[ $blog_id ] ?? array() ), $n, $boot_ms, microtime( true ) - $t1 ) );
 	fflush( STDOUT );
@@ -308,7 +387,7 @@ if ( ! $ex_since ) {
 			if ( null === $base ) {
 				continue;
 			}
-			$pages = max( 1, (int) ceil( $t->count / $ppp ) );
+			$pages = ex_term_pages( $t, $ppp );
 			for ( $pg = 1; $pg <= $pages; $pg++ ) {
 				ex_out( array( 'p' => 1 === $pg ? $base : $base . "page/$pg/", 'b' => $blog_id, 'k' => 'term', 't' => $tax->name, 'id' => (int) $t->term_id, 'pg' => $pg ) );
 			}
@@ -328,6 +407,7 @@ if ( ! $ex_since ) {
 		}
 	}
 }
+ex_pages_diff_line();
 ex_line( sprintf( '# blog %d (%s): %d URL, boot %d ms, xuất %.1f s, RAM tối đa %d MB',
 	$blog_id, home_url( '/' ), $n, $boot_ms, microtime( true ) - $t1, memory_get_peak_usage( true ) / 1048576 ) );
 fflush( STDOUT );

@@ -796,7 +796,20 @@ Dữ liệu test để lại trên php81: excerpt của bài 150 có chữ "t0�
     - vi `tu-lieu`: count 0, gồm con 794 → 67 trang (`/page/67/` 200, `/page/68/` 404), thiếu 66;
     - vi `ban-tin`: count 0, gồm con 124 → tính 11 trang nhưng `/page/11/` 404: cách đếm `any` dư, bản sửa phải đếm đúng như truy vấn chính của archive.
     - Hệ quả với vi: 76 trang phân trang này không có trong DB. P6 đã coi chúng là mồ côi (nằm trong 111 path đã xóa trên server), nên giờ không có trên S3/KV; khách vẫn xem được (Worker `kv-miss` → origin, WP Rocket tạo lại khi có lượt xem).
-  - Dừng, chờ chủ site chọn cách xử lý.
+  - Dừng, chờ chủ site chọn cách xử lý. Chủ site chọn **sửa ngay** rồi mới chạy en.
+- **Sửa `export-urls.php`** (20:40–20:53, chủ site duyệt thay trên production):
+  - Đo trước (chỉ đọc), 3 cách đếm số trang cho chuyên mục cha, so với HTTP thật (trang cuối 200, trang sau 404):
+    A `ceil(count/ppp)` sai cả 3; B `WP_Query include_children, post_type any` sai `ban-tin` (11, thật 10);
+    **C dựng truy vấn chính** (đặt tạm `$wp_the_query`, nên hook `pre_get_posts` của theme chạy, vd
+    `include_custom_post_types_in_category_archives` chèn CPT vào archive) đúng cả 3.
+  - C cho mọi term: vi 788 term 1,6 s, en 68 term 0,8 s. Chỉ 3 term lệch so với A (đều là chuyên mục cha có con, đều thiếu), mọi tag/cdt/khu-vuc khớp.
+  - Sửa: hàm `ex_term_pages()` (cách C) dùng cho export toàn bộ và `--ids`; `--ids` trả thêm **chuyên mục tổ tiên** của term gắn với bài (trước đây sửa bài ở chuyên mục con không làm mới trang chuyên mục cha); log `#` liệt kê term có số trang khác `ceil(count/ppp)`.
+  - Chạy thử bản mới từ `/tmp` (chỉ đọc DB): 68.196 URL so với 65.657, **+2.539 path, không mất path nào** (vi `ban-tin` +9, `tu-lieu` +66; en `map-of-us-cities-and-places` +2.464); 10,1 s so với 12,9 s. `--ids` cho bài ở chuyên mục con: thêm dòng chuyên mục cha với đúng số trang (2.465 / 67 / 10), các dòng khác như cũ.
+  - Thay: md5 cũ `672208c4…` → mới `55538bb0…` (khớp repo). Backup `export-urls.php.bak-2026-11-28` (cạnh file) và `/root/backup-en-2026-11-28/export-urls.php.bak`. **Chưa cập nhật php81.**
+  - `urls sync`: thêm 2.539, mất 0. DB: `tu-lieu/page/` 66, `ban-tin/page/` 9, `map-of-us-cities-and-places/page/` 2.464.
+  - **Kiểm kê en lại:** 39.361 URL; S3 36.893 `index-https.html`, 110.680 file kiểu cũ sẽ xóa, mồ côi 0; KV mồ côi 0; server 113.861 file mobile, **mồ côi 4 path (0,01%)**.
+  - **Render 75 trang vi còn thiếu** (`update -txt lists/diaocthongthai.com/vi-missing-pages-2026-11-28.txt -blog / -yes`): 75/75 ok, 58 s, KV +75. `/tu-lieu/page/67/`, `/ban-tin/page/10/`: nginx HIT, S3 200.
+- **Chạy thật en** từ 20:57: `systemd-run --unit=dott-update-en --collect` (MemoryMax 400M, Nice 10, CPUQuota 50%), log `logs/diaocthongthai.com/update-all-en-20261128-2057.txt`, 197 lô. Xem tiến độ: `bash test/en-status.sh` (VPS phụ). Kết quả: xem mục sau khi chạy xong.
 
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.
