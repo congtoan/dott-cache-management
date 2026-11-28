@@ -842,6 +842,10 @@ Dữ liệu test để lại trên php81: excerpt của bài 150 có chữ "t0�
   - Tunnel tắt: `/health` 000, lệnh `wp` 1,1 s (gồm ssh, không chậm), `serve` không nhận gì; bật lại: `ok`. **Không có dòng `error_log`**: `wp_remote_post` với `blocking=false` không trả lỗi khi kết nối bị từ chối, nên sự kiện mất mà không có dấu vết (lưới an toàn: reconcile hằng ngày).
   - Chưa test trên production: sửa bài thật trong admin (Gutenberg 2 request), bình luận, đổi slug, xóa bài, sửa term. Đã test trên php81 (rollout-log mục "Pool").
 - **Lịch:** `reconcile -blog / -dry-run` 01:50: cần có 24.414, KV 24.414, S3 24.413, thiếu 1 (`/cong-bo-du-an-the-western-capital/`, Rank Math redirect), mồ côi 0. Bật `dott-cache-reconcile@vi/en.timer` (03:30) và `dott-cache-submit-all@vi.timer` (ngày 1, 04:00), `@en.timer` (ngày 15, 04:00). Pool 2 site trống.
+- **Sửa bài thật trong admin (chủ site, 01:57):**
+  - Trước đó chủ site sửa lỗi `/cong-bo-du-an-the-western-capital/` (bài 2939 bị redirect 301 về trang chủ): ảnh đính kèm ID 918 (`cong-bo-du-an-the-western-capital.jpg`, ảnh đại diện của bài, không gắn với bài nào) có slug trùng với bài. Đổi slug ảnh thành `cong-bo-du-an-the-western-capital-anh` bằng WP-CLI; file và URL ảnh giữ nguyên. Bài truy cập được.
+  - Chủ site thêm "[Nóng] " vào đầu nội dung bài 2939 trong Gutenberg. `serve`: 01:57:48 nhận 2 sự kiện (2 request của Gutenberg) → gom, `--ids` 2 mục 2,4 s → làm mới 3 URL (bài, trang chủ, `/tags/western-capital/`) → 01:57:59 lô HTTP 3/3 ok (render 0,5 s, upload+KV 3,4 s). **11 s từ lúc lưu.**
+  - Kiểm tra: DB `post_content` bắt đầu bằng "[Nóng]"; file trên đĩa `cached@` mới (01:57:56); S3 `Last-Modified` 18:57:56 UTC, HTML có "[Nóng]"; qua Cloudflare NA desktop và iPhone `S3-NA`, châu Á `ORIGIN-region-AS`, đều 200. URL này hết lỗi, reconcile sẽ không còn báo thiếu.
 - **Quay lại:** xóa `dott-cache-hook.json` (tắt sự kiện ngay); bỏ hẳn: xóa `mu-plugins/dott-cache-events.php`, `systemctl disable --now` các timer, sửa `-sites` về `php81.congtoan.net` rồi restart serve.
 
 ### Việc không liên quan nhưng cần biết

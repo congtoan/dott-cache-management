@@ -53,8 +53,8 @@ dott-cache urls sync|list|stats ...; update -all|-url|-txt|-segment ... -blog / 
 - Key tunnel `/root/.ssh/id_dott_tunnel` (alias `main-tunnel`, `restrict,port-forwarding,permitlisten="127.0.0.1:8790",…`). Token hook: `config/secrets/hook-<site>.token`.
 
 ## 4. Việc tiếp theo
-1. **Chủ site sửa thử 1 bài thật trong admin** (vi, rồi en) và xem `journalctl -u dott-cache-serve -f` trên VPS phụ: Gutenberg gửi 2 request, chưa test trên production. Sau đó theo dõi lượt reconcile 03:30 đầu tiên (`journalctl -u dott-cache-reconcile@vi`).
-2. `/cong-bo-du-an-the-western-capital/`: bài publish nhưng Rank Math redirect 301 về trang chủ. Chủ site chọn bỏ redirect hay thêm vào `exclude` (nếu không, reconcile sẽ đưa vào pool mỗi ngày và lỗi).
+1. Sửa bài thật trong admin: **vi đã đạt** (29/11 01:57, 11 s từ lúc lưu tới S3). Còn: sửa 1 bài en, bình luận, đổi slug, xóa bài trên production. Theo dõi lượt reconcile 03:30 đầu tiên (`journalctl -u dott-cache-reconcile@vi`, `@en`).
+2. ~~`/cong-bo-du-an-the-western-capital/`~~: chủ site đã sửa (slug ảnh 918 trùng slug bài).
 3. Cập nhật `export-urls.php` mới cho php81 (cùng bản production).
 4. **Đo** tốc độ khách Việt Nam với Worker v2 (châu Á vào origin) so với trước.
 5. `submit -stale` (làm mới theo tuổi `cached@`): [design-pool.md mục 8b](docs/design-pool.md).
