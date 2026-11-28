@@ -13,7 +13,7 @@
   "renew": {"ssh_host": "main", "command": "/usr/local/sbin/dott-prefork diaocthongthai.com"},
   "kv": {"namespace_id": "cc831ca12e954d0b8a875a3453abacc7"},
   "throttle": {"max_load": 1.5, "resume_load": 1.0, "max_wait_sec": 300},
-  "write_blogs": ["-"],
+  "write_blogs": ["/"],
   "urls": {
     "skip_blogs": ["/es/"],
     "taxonomies": {
