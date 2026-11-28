@@ -809,7 +809,13 @@ Dữ liệu test để lại trên php81: excerpt của bài 150 có chữ "t0�
   - `urls sync`: thêm 2.539, mất 0. DB: `tu-lieu/page/` 66, `ban-tin/page/` 9, `map-of-us-cities-and-places/page/` 2.464.
   - **Kiểm kê en lại:** 39.361 URL; S3 36.893 `index-https.html`, 110.680 file kiểu cũ sẽ xóa, mồ côi 0; KV mồ côi 0; server 113.861 file mobile, **mồ côi 4 path (0,01%)**.
   - **Render 75 trang vi còn thiếu** (`update -txt lists/diaocthongthai.com/vi-missing-pages-2026-11-28.txt -blog / -yes`): 75/75 ok, 58 s, KV +75. `/tu-lieu/page/67/`, `/ban-tin/page/10/`: nginx HIT, S3 200.
-- **Chạy thật en** từ 20:57: `systemd-run --unit=dott-update-en --collect` (MemoryMax 400M, Nice 10, CPUQuota 50%), log `logs/diaocthongthai.com/update-all-en-20261128-2057.txt`, 197 lô. Xem tiến độ: `bash test/en-status.sh` (VPS phụ). Kết quả: xem mục sau khi chạy xong.
+- **Chạy thật en** từ 20:57: `systemd-run --unit=dott-update-en --collect` (MemoryMax 400M, Nice 10, CPUQuota 50%), log `logs/diaocthongthai.com/update-all-en-20261128-2057.txt`, 197 lô. Xem tiến độ: `bash test/en-status.sh` (VPS phụ).
+  - Dọn: server xóa 113.861 file mobile + 8 file mồ côi; S3 xóa 110.680/110.680 object; KV không có gì cần xóa.
+  - **Xong 23:25** (8.856 s, khoảng 2 giờ 28 phút, 4,4 URL/s): 39.353/39.361 ok; KV thêm 2.465 key. Điều tiết: nghỉ trước lô 8 lần (498 s), PHP nghỉ 61 lần (2.286 s), load cao nhất 2,44. Không URL nào lỗi render.
+  - 8 URL lỗi ở bước **PUT S3** (lỗi mạng tạm thời; 5 bài `map-city-*` còn bản cũ trên S3, 3 trang `map-of-us-cities-and-places/page/1507–1509/` thiếu hẳn). Chạy lại 00:30 (`update -txt lists/diaocthongthai.com/en-retry-2026-11-29.txt -blog /en/ -yes`): 8/8 ok, KV +3.
+  - `reconcile -blog /en/ -dry-run` (00:31): cần có 39.365, KV 39.365, S3 39.365; **thiếu 0, mồ côi 0**.
+  - Qua Cloudflare (giả lập NA): `/en/abkhazia-maps/`, `/en/map-of-us-cities-and-places/page/1508/`, `/en/list-of-all-us-states/`: desktop và iPhone đều `S3-NA`, cùng md5, `core.js?ver=1cc3bb7b7f`.
+- **Lần 2 site en: xong.** Còn lại: P8 cho cả 2 blog.
 
 ### Bỏ exclude 8 trang danh sách (28/11 21:54–22:00, chủ site yêu cầu)
 - Chủ site bỏ các mục sau khỏi `cache_reject_uri` của WP Rocket (lưu thiết lập 21:54 vi, 21:56 en): `/danh-sach-xa-phuong-viet-nam/`, `/danh-sach-xa-phuong-viet-nam-2025-new/`, `/danh-sach-phuong-xa-(.*)/`, `/danh-sach-quan-huyen-viet-nam/`, `/en/list-of-all-countries-in-the-world/`, `/en/list-of-all-us-states/`, `/en/list-of-all-us-counties/`, `/en/list-of-all-us-cities-and-places/`.
@@ -817,7 +823,8 @@ Dữ liệu test để lại trên php81: excerpt của bài 150 có chữ "t0�
 - Config VPS phụ (backup `.bak-2026-11-28-2200`): bỏ 8 mục tương ứng trong `urls.exclude`; bản trong repo `deploy/config/sites/` đồng bộ theo (gồm cả `write_blogs: ["/", "/en/"]`).
 - Export (chỉ đọc): 70 URL (7 trang trên + 63 `/danh-sach-phuong-xa-<tỉnh>/`), danh sách `lists/diaocthongthai.com/unexcluded-2026-11-28.txt`. Đo render (có query string): 0,2–1,7 s; lớn nhất `/danh-sach-xa-phuong-viet-nam/` 4,7 MB (10.037 `<tr>`), `-2025-new` 3,3 MB; dưới giới hạn 8 MB của bước lấy HTML.
 - Pool production chưa bật và `dott-update-en` giữ khóa site, nên tạo unit `dott-after-en` (22:00): chờ `dott-update-en` dừng, rồi `urls sync`, `update -txt unexcluded-vi.txt -blog /` và `unexcluded-en.txt -blog /en/`. Script `test/after-en.sh`, log `logs/diaocthongthai.com/after-en-20261128.txt`.
-- Cần xem khi en xong: `/en/test-cache/` có trong `cache_reject_uri` của en nhưng nằm trong DB, nên có thể là URL lỗi (không có `cached@`).
+- Cần xem khi en xong: `/en/test-cache/` có trong `cache_reject_uri` của en nhưng nằm trong DB, nên có thể là URL lỗi (không có `cached@`). Kết quả: lượt en không có URL nào lỗi render, reconcile thiếu 0.
+- **Kết quả `dott-after-en`** (chạy 23:25–23:28): `urls sync` thêm 70; vi 66/66 ok (prefork, 82 s, KV +66; wpdatatables vẫn báo không ghi được `tempfile187.xlsx`, trang vẫn đạt); en 4/4 ok (HTTP, 59 s, KV +4). `/danh-sach-xa-phuong-viet-nam/` qua Cloudflare (NA): `S3-NA`, desktop = iPhone.
 
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.
