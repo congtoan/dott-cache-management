@@ -736,7 +736,21 @@ Dữ liệu test để lại trên php81: excerpt của bài 150 có chữ "t0�
 - Dọn: KV 9 key; server 66.549 mobile + 222 mồ côi (11 s); S3 72.127 object (41 s), không lỗi.
 - Render: lô 200 URL khoảng 72 s (2,8 URL/s), lô đầu nghỉ 90 s vì load. Thứ tự (đo trên log): trang chủ `/` (trang tĩnh), 21.293 bài, 792 archive trang 1, 2.188 phân trang.
 - Kiểm tra một URL đã render (`/ban-do-an-do/`): server chỉ còn `index-https.html` + `_gzip`; nginx HIT cùng bản cho desktop và iPhone, có `core.js`; S3 chỉ còn HTML mới (mobile, `_gzip` 403).
-- Kết quả cuối: xem mục sau khi chạy xong.
+- **Kết quả cuối (xong 20:18, tổng 10.961 s, khoảng 3 giờ 3 phút, 2,2 URL/s):**
+  - 24.272/24.273 URL ok (fetch nguồn HIT 24.271, MISS 1). KV thêm 488 key còn thiếu, lỗi 0. Unit thoát mã 1 vì còn 1 URL.
+  - Điều tiết: nghỉ trước lô 4 lần (238 s), PHP nghỉ 82 lần (3.034 s, khoảng 28% thời gian), load cao nhất trước lô 2,45.
+    Phần archive và phân trang ở cuối nhanh hơn bài (lô cuối 7–9 URL/s).
+  - URL lỗi: `/cong-bo-du-an-the-western-capital/` (bài `ban_tin_du_an` ID 2939, publish) bị **Rank Math redirect 301 về
+    trang chủ**, nên lần nào render cũng lỗi. Cần chủ site chọn: bỏ redirect, hoặc thêm vào `exclude` của config.
+  - Lần lỗi khác: 1 URL lô 10 (wpdatatables ghi `tempfile136.csv`, không có quyền ghi), thử lại bằng HTTP thì đạt.
+  - Kiểm tra sau:
+    - `reconcile -blog / -dry-run` (20:31): cần có 24.273, KV 24.273, S3 24.272; thiếu 1 (URL redirect ở trên), **mồ côi 0**.
+    - `/`, `/ban-do-an-do/`, 6 URL ngẫu nhiên trong log (gồm `/xa-phuong-viet-nam/page/354/`,
+      `/ban-do-cac-bang-cua-my/page/2/`): desktop và iPhone đều nginx HIT, cùng md5, có `core.js?ver=62d9b17e24`.
+    - S3: `index-https.html` 200; `index-mobile-https.html`, `_gzip` 403 (không còn).
+    - Server sau khi chạy (dry-run): không còn file mobile; 7 path mồ côi (14 file) xuất hiện trong lúc chạy, chưa xóa.
+    - S3 còn "2 file khác" (không phải `index-https.html`) của blog `/`, chưa xác định tên (VPS phụ không có boto3). Không ảnh hưởng
+      phục vụ: Worker chỉ đọc `index-https.html`.
 
 ### P7 production: Worker v2 thay v7 (28/11 17:45, chủ site yêu cầu "deploy ngay")
 - Lý do phải làm ngay: v7 chọn file theo `Accept-Encoding` và User-Agent, nên gần như luôn đọc `index[-mobile]-https.html_gzip`. P6 đã xóa các file này của site vi, nên với v7 mỗi trang vi = KV + một lần gọi S3 hỏng + origin.
@@ -774,7 +788,15 @@ Dữ liệu test để lại trên php81: excerpt của bài 150 có chữ "t0�
   - vi `S3-NA` như cũ; redirect `/tag/`, `/map-*`, `/en/page/2/`, ảnh uploads 301; `link_ds_*` 410; `/en/wp-json/` `ORIGIN-bypass`; chữ hoa 301; query `ORIGIN-query`; key sai bị bỏ qua.
   - Từ lúc này tới khi bước 5 render lại, khách NA/SA dùng mobile nhận bản desktop cũ trên S3 (S3 en còn bản 21/11).
 - **Quay lại:** theme: giải nén `generatepress_en.tgz` đè lên và xóa `tt-core/`, `LEGACY-FILES.md`; mu-plugin: chép `.bak-2026-11-28`; config: chép `wp-rocket-config/diaocthongthai.com.en.php` từ backup (đợi 3 phút); Worker: `deploy-production.sh.bak-2026-11-28-1830 deploy` (có `LEGACY_PREFIXES`).
-- **Bước 5** (tạo lại cache en) chờ P6 vi xong (dự kiến 20:50–21:10).
+- **Bước 5** (tạo lại cache en), 20:33: config VPS phụ `write_blogs: ["/", "/en/"]` (backup `config/sites/diaocthongthai.com.json.bak-2026-11-28-2033`); `urls sync`: 61.170 URL, không thêm/mất.
+  - Kiểm kê `update -all -blog /en/` (không `-yes`): 36.897 URL; S3 `index-https.html` 36.893, file kiểu cũ 110.680 (sẽ xóa), mồ côi 0; KV 61.166 key, mồ côi 0; server 113.861 file mobile, **2.468 path mồ côi (6,7%, vượt ngưỡng 2%) → tool dừng, chưa ghi gì**.
+  - Mồ côi: 2.464 là `/en/map-of-us-cities-and-places/page/2..2465/` (có thật: `/page/2465/` 200, `/page/2466/` 404; cache 05–12/11); còn lại `/en/search/` (2), `/en/secretlogin/`, 1 bài có `'` trong slug. Danh sách: VPS phụ `test/en-orphans-2026-11-28.txt`.
+  - **Nguyên nhân: lỗi `export-urls.php`** (dòng 311, và dòng 186 của `--ids`): số trang archive = `ceil(term->count / posts_per_page)`, mà `term->count` chỉ đếm bài gắn trực tiếp. Archive chuyên mục cha hiện cả bài chuyên mục con, nên thiếu trang. Đo (WP_Query `include_children`, post type `any`):
+    - en `map-of-us-cities-and-places`: count 0, gồm con 29.574 → thiếu 2.464 trang (khớp đúng số mồ côi);
+    - vi `tu-lieu`: count 0, gồm con 794 → 67 trang (`/page/67/` 200, `/page/68/` 404), thiếu 66;
+    - vi `ban-tin`: count 0, gồm con 124 → tính 11 trang nhưng `/page/11/` 404: cách đếm `any` dư, bản sửa phải đếm đúng như truy vấn chính của archive.
+    - Hệ quả với vi: 76 trang phân trang này không có trong DB. P6 đã coi chúng là mồ côi (nằm trong 111 path đã xóa trên server), nên giờ không có trên S3/KV; khách vẫn xem được (Worker `kv-miss` → origin, WP Rocket tạo lại khi có lượt xem).
+  - Dừng, chờ chủ site chọn cách xử lý.
 
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.
