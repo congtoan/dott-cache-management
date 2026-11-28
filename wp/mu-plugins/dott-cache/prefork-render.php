@@ -34,7 +34,7 @@ if ( PHP_SAPI !== 'cli' ) {
 	exit( 1 );
 }
 
-$opt = getopt( '', array( 'root:', 'host:', 'urls:', 'parallel::', 'readonly', 'no-delete', 'delete-only', 'purge-cache', 'all', 'dry-run', 'out::', 'limit::' ) );
+$opt = getopt( '', array( 'root:', 'host:', 'urls:', 'parallel::', 'readonly', 'no-delete', 'delete-only', 'purge-cache', 'all', 'dry-run', 'keep-orphans', 'out::', 'limit::' ) );
 foreach ( array( 'root', 'host', 'urls' ) as $k ) {
 	if ( empty( $opt[ $k ] ) ) {
 		fwrite( STDOUT, "# thiếu --$k\nDONE ok=0 fail=0 skip=0\n" );
@@ -103,6 +103,7 @@ pf_line( sprintf( '# %d path hợp lệ, %d bị bỏ', count( $pf_paths ), $pf_
  *   - file index*.html lạ (vd bản theo query string) trong thư mục được giữ.
  * Giữ index-https.html và index-https.html_gzip của path cần giữ (prefork sẽ xóa từng URL ngay trước khi render).
  * --all: xóa hết (không giữ gì). --dry-run: chỉ đếm (dùng để kiểm tra sau khi chạy).
+ * --keep-orphans: không xóa thư mục mồ côi (chỉ đếm), vẫn xóa bản mobile.
  * Chỉ đụng file có tên index*.html, index*.html_gzip, .mobile-active; không xóa thư mục. */
 if ( isset( $opt['purge-cache'] ) ) {
 	$base = $pf_root . '/wp-content/cache/wp-rocket/' . $pf_host;
@@ -112,8 +113,10 @@ if ( isset( $opt['purge-cache'] ) ) {
 	foreach ( $pf_paths as $p ) {
 		$keep[ strtolower( $p ) ] = true;
 	}
-	$c = array( 'xóa_mobile' => 0, 'xóa_mồ_côi' => 0, 'xóa_lạ' => 0, 'xóa_all' => 0, 'giữ_html' => 0, 'giữ_gzip' => 0 );
+	$keep_orphans = isset( $opt['keep-orphans'] );
+	$c = array( 'xóa_mobile' => 0, 'xóa_mồ_côi' => 0, 'xóa_lạ' => 0, 'xóa_all' => 0, 'giữ_html' => 0, 'giữ_gzip' => 0, 'giữ_mồ_côi' => 0 );
 	$have_html = array();
+	$orphan_dirs = array();
 	$t0 = microtime( true );
 	if ( is_dir( $base ) ) {
 		$it = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $base, FilesystemIterator::SKIP_DOTS ) );
@@ -131,6 +134,11 @@ if ( isset( $opt['purge-cache'] ) ) {
 			} elseif ( '.mobile-active' === $name || false !== strpos( $name, 'mobile' ) ) {
 				$why = 'xóa_mobile';
 			} elseif ( empty( $keep[ $rel ] ) ) {
+				$orphan_dirs[ $rel ] = true;
+				if ( $keep_orphans ) {
+					$c['giữ_mồ_côi']++;
+					continue;
+				}
 				$why = 'xóa_mồ_côi';
 			} elseif ( 'index-https.html' === $name ) {
 				$c['giữ_html']++;
@@ -150,7 +158,7 @@ if ( isset( $opt['purge-cache'] ) ) {
 	}
 	$missing = $all ? 0 : count( array_diff_key( $keep, $have_html ) );
 	pf_line( sprintf( '# %s %s trong %.1f s', $dry ? 'đếm (dry-run)' : 'dọn', $base, microtime( true ) - $t0 ) );
-	pf_line( 'PURGE ' . json_encode( $c + array( 'path_giữ' => count( $keep ), 'path_giữ_chưa_có_html' => $missing, 'dry_run' => $dry ), JSON_UNESCAPED_UNICODE ) );
+	pf_line( 'PURGE ' . json_encode( $c + array( 'path_giữ' => count( $keep ), 'path_giữ_chưa_có_html' => $missing, 'path_mồ_côi' => count( $orphan_dirs ), 'dry_run' => $dry ), JSON_UNESCAPED_UNICODE ) );
 	@rmdir( $pf_tmp );
 	pf_line( "DONE ok=0 fail=0 skip=$pf_skip" );
 	exit( 0 );

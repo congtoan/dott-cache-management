@@ -215,6 +215,7 @@ func runRemote(ctx context.Context, host, command, stage string, paths []string,
 				fmt.Println("    " + l)
 			}
 		case strings.HasPrefix(l, "PURGE "):
+			lastPurgeRaw = l[6:]
 			lastPurge = purgeSummary(l[6:])
 		default:
 			if !quietRemote || !strings.HasPrefix(l, "# ") {

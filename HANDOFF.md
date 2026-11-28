@@ -109,6 +109,9 @@ Header S3 phải giữ khi upload: `ContentType: text/html`, `CacheControl: publ
   - Dọn mobile và mồ côi trên server.
   - Thứ tự: trang chủ và bài → archive trang 1 → phân trang. Prefork theo lô 500, upload song song.
   - Kết quả: 1.448/1.448 URL trong 142 s, load VPS chính tối đa 2,04. **Cần điều tiết theo load trước khi chạy production.**
+  - Mồ côi (path không có trong DB) được xóa **trước** khi generate, theo thứ tự KV → server → S3.
+  - Chặn khi DB chưa sync toàn bộ trong 26 giờ, hoặc số mồ côi vượt 2%; `-force` để bỏ qua, `-keep-orphans` để chỉ báo cáo.
+  - Lần test thứ 2: 167 s, load tối đa 3,54.
 
 ## 5. Việc tiếp theo (chủ site chọn)
 1. **Service `dott-cache` có hàng đợi** (SQLite, nhận sự kiện từ mu-plugin trên php81, render bằng HTTP hoặc prefork, upload nhiều đích), test trên php81 với bucket test.

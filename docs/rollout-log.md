@@ -398,5 +398,34 @@ Mục đích: mô phỏng diaocthongthai.com để test tt-core, cache một b�
 - **Load VPS chính:** tối đa 2,04, trung bình 1,43 (27 mẫu). Cao hơn lúc chỉ chạy prefork (0,92), vì có thêm request lấy HTML để upload. Trước khi chạy cho production cần **điều tiết theo load** (design mục 6), ví dụ nghỉ giữa các lô khi load > 1,5.
 - **Ước tính production** (chưa đo): 61.175 URL × khoảng 12 URL/s ≈ 85 phút, nếu tốc độ prefork giống php81.
 
+### `regen-all`: xóa mồ côi TRƯỚC khi generate (28/11, chủ site chốt)
+- **Mồ côi** là file cache (server, S3) hoặc key KV của một path **không có** trong tập URL active của DB. Ví dụ: bài đã xóa hoặc chuyển nháp, đổi slug, URL bị loại theo config, trang phân trang không còn, thư mục test.
+- **Cách xác định:** lấy thư mục chứa file (với S3 thì bỏ prefix và tên file), chuẩn hóa như Worker (viết thường, `/` cuối), rồi so với tập path active.
+- **Thứ tự mới:**
+  1. kiểm kê;
+  2. xóa KV mồ côi (trước, để Worker không dẫn khách tới object sắp bị xóa);
+  3. dọn server (thư mục mồ côi, mobile, file lạ);
+  4. xóa S3 (html mồ côi và mọi file không phải `index-https.html`);
+  5. generate;
+  6. kiểm tra lại.
+  - `-keep-orphans`: chỉ báo cáo, không xóa.
+- **Hai lớp chặn trước khi xóa** (rủi ro là DB thiếu URL):
+  - `urls sync` toàn bộ phải chạy trong vòng 26 giờ;
+  - số path mồ côi nhiều nhất trong 3 nơi phải ≤ `max_remove_pct` (2%).
+  - Vượt một trong hai thì in lý do và dừng (exit 1) trước khi xóa, trừ khi có `-force`. Bản kiểm kê có in ví dụ mồ côi.
+- **Test trên php81:**
+  - Tạo mồ côi giả: server 2 thư mục và 1 thư mục có bản mobile; S3 3 html mồ côi trên mỗi đích; KV 3 key mồ côi.
+  - Kiểm kê thấy: S3 4 path mồ côi mỗi đích (thêm 1 cái giả từ lần test trước); server 2 path; KV **44 key**: 3 key giả và **41 key thật** của blog `/`, `/en/` vừa bị loại bằng `skip_blogs` nhưng còn trong KV.
+  - 44/1.448 = 3% > 2%: tool **dừng đúng**.
+  - Giả lập DB cũ (`urls_full_last` lùi 3 ngày): tool dừng với cả 2 lý do, exit 1, không xóa gì.
+  - Chạy với `-force` (sau khi đã kiểm tra danh sách):
+    - KV xóa 44 key (0,3 s);
+    - server xóa 4 file mồ côi và 4 file mobile;
+    - S3 xóa 4/4 object mỗi đích;
+    - prefork 3 lô (10,8–11,4 URL/s);
+    - **1.448/1.448 ok trong 167 s**.
+  - Kiểm kê lại sau khi chạy: S3, KV và server đều 0 mồ côi, 0 file kiểu cũ. KV còn đúng 1.448 key.
+- **Load VPS chính:** tối đa **3,54**, trung bình 1,58 (lần trước tối đa 2,04). Khi prefork chạy cùng request lấy HTML để upload, máy 1 vCPU bị quá tải theo từng đợt. **Bắt buộc phải có điều tiết theo load trước khi chạy production.**
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.

@@ -5,29 +5,34 @@ package main
 //
 //	dott-cache regen-all -site <domain>                 # chỉ kiểm kê và in kế hoạch (không xóa, không ghi)
 //	dott-cache regen-all -site <domain> -yes            # chạy thật
-//	                     [-batch 500] [-purge-all-first] [-delete-orphans]
+//	                     [-batch 500] [-purge-all-first] [-keep-orphans] [-force]
 //
 // Theo nguyên tắc đã thống nhất: mỗi URL chỉ có MỘT bản cache trên server (index-https.html +
 // index-https.html_gzip, không có bản mobile), và chỉ upload index-https.html lên S3.
 //
-// Các bước:
-//  1. Kiểm kê S3: LIST prefix trên mọi đích MỘT lần (giống manifest của hệ thống cũ), ghi ra
-//     logs/<domain>/s3-manifest-<đích>-<thời gian>.txt. Chỉ những key thật sự có mới được xóa
-//     (server và S3 có thể lệch nhau). Kiểm kê server: dott-prefork --purge-cache --dry-run.
-//  2. Dọn server (dott-prefork --purge-cache): xóa mọi bản mobile và .mobile-active (hệ thống cũ có
-//     5 file mỗi URL), file trong thư mục mồ côi (URL không còn trong DB), file lạ.
-//     Bản desktop của URL trong DB được giữ tới lúc render (prefork xóa từng URL ngay trước khi
-//     render), để khách không phải chờ PHP render trong suốt thời gian regen.
-//     -purge-all-first: xóa hết mọi file cache ngay từ đầu.
-//  3. Xóa S3 MỘT lần ngay từ đầu (chủ site chốt 28/11): mọi file KHÔNG phải index-https.html
-//     (index-mobile-https.html, index-https.html_gzip, index-mobile-https.html_gzip... của hệ thống cũ),
-//     theo lô 1.000 key (DeleteObjects), nhiều lô song song mỗi đích.
-//     index-https.html được GIỮ và ghi đè khi upload, nên Worker luôn có bản để phục vụ trong lúc regen.
-//     index-https.html của URL không còn trong DB (mồ côi): chỉ báo cáo, xóa khi có -delete-orphans.
-//  4. Thứ tự: trang chủ và bài đơn → trang 1 của archive (category, tag, taxonomy, post type) →
+// "Mồ côi" = file cache (server, S3) hoặc key KV của một path KHÔNG có trong tập URL active của DB
+// (bài đã xóa hoặc chuyển nháp, đổi slug, URL bị loại theo config, trang phân trang không còn,
+// thư mục test). Cách xác định: lấy thư mục chứa file (S3: bỏ prefix và tên file), chuẩn hóa
+// như Worker (viết thường, "/" cuối), so với tập path active. Rủi ro duy nhất là DB THIẾU URL, nên có 2 lớp chặn:
+//   - DB phải được "urls sync" toàn bộ trong vòng 26 giờ;
+//   - số path mồ côi không được vượt max_remove_pct (mặc định 2%) số URL.
+// Vượt một trong hai thì dừng trước khi xóa, trừ khi có -force.
+//
+// Các bước (mồ côi được xóa TRƯỚC khi generate, chủ site chốt 28/11):
+//  1. Kiểm kê: LIST S3 trên mọi đích MỘT lần (manifest, ghi ra logs/<domain>/...-s3-manifest-<đích>.txt),
+//     list KV, đếm file trên server (dott-prefork --purge-cache --dry-run). Chỉ key thật sự có mới được xóa.
+//  2. Xóa KV mồ côi TRƯỚC (để Worker không dẫn khách tới object sắp bị xóa).
+//  3. Dọn server (dott-prefork --purge-cache): xóa thư mục mồ côi, mọi bản mobile và .mobile-active
+//     (hệ thống cũ có 5 file mỗi URL), file lạ. Bản desktop của URL trong DB được giữ tới lúc render
+//     (prefork xóa từng URL ngay trước khi render). -purge-all-first: xóa hết ngay từ đầu.
+//  4. Xóa S3 MỘT lần: index-https.html mồ côi và mọi file KHÔNG phải index-https.html (bản mobile,
+//     _gzip của hệ thống cũ), theo lô 1.000 key, nhiều lô song song mỗi đích. index-https.html của
+//     URL trong DB được GIỮ và ghi đè khi upload, nên Worker luôn có bản để phục vụ trong lúc regen.
+//     -keep-orphans: không xóa mồ côi ở cả 3 nơi (chỉ báo cáo).
+//  5. Thứ tự: trang chủ và bài đơn → trang 1 của archive (category, tag, taxonomy, post type) →
 //     trang phân trang. Prefork theo lô (-batch URL mỗi lần ssh). Lô nào xong thì lấy HTML qua HTTP và upload lên mọi
 //     đích NGAY, song song với lô prefork tiếp theo. URL prefork lỗi (không phải 404) thì thử lại bằng HTTP.
-//  5. Kiểm tra lại: LIST S3 lần nữa và đếm file trên server.
+//  6. Kiểm tra lại: LIST S3 lần nữa và đếm file trên server.
 
 import (
 	"context"
@@ -37,6 +42,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -47,13 +53,42 @@ import (
 	"github.com/congtoan/dott-cache-management/internal/store"
 )
 
-// lastPurge: dòng "PURGE {json}" gần nhất mà runRemote đọc được (lệnh CLI chạy tuần tự nên không cần khóa).
-var lastPurge string
+// lastPurge / lastPurgeRaw: dòng "PURGE {json}" gần nhất mà runRemote đọc được (dạng in ra / JSON gốc).
+// Lệnh CLI chạy tuần tự nên không cần khóa.
+var lastPurge, lastPurgeRaw string
 
 type s3Inventory struct {
 	html, other, orphan int
+	orphanDirs          map[string]bool
 	keys                []string // mọi key cần xóa (theo chế độ)
 	htmlKeep            map[string]bool
+}
+
+// sample: tối đa 6 phần tử đầu để in ra (đã sắp xếp).
+func sample(s []string) string {
+	if len(s) == 0 {
+		return ""
+	}
+	if len(s) <= 6 {
+		return "[" + strings.Join(s, " ") + "]"
+	}
+	return fmt.Sprintf("[%s ... và %d khác]", strings.Join(s[:6], " "), len(s)-6)
+}
+
+func ageStr(ts int64, age time.Duration) string {
+	if ts == 0 {
+		return "chưa bao giờ"
+	}
+	return fmt.Sprintf("%s (%.1f giờ trước)", time.Unix(ts, 0).Format("2006-01-02 15:04"), age.Hours())
+}
+
+func purgeNum(k string) int {
+	var m map[string]any
+	json.Unmarshal([]byte(lastPurgeRaw), &m)
+	if v, ok := m[k].(float64); ok {
+		return int(v)
+	}
+	return 0
 }
 
 func cmdRegenAll(args []string) {
@@ -63,7 +98,8 @@ func cmdRegenAll(args []string) {
 	yes := fs.Bool("yes", false, "chạy thật (không có cờ này thì chỉ kiểm kê và in kế hoạch)")
 	batch := fs.Int("batch", 500, "số URL mỗi lô prefork")
 	purgeFirst := fs.Bool("purge-all-first", false, "xóa hết file cache trên server ngay từ đầu")
-	delOrphans := fs.Bool("delete-orphans", false, "xóa cả index-https.html của URL không còn trong DB trên S3")
+	keepOrphans := fs.Bool("keep-orphans", false, "KHÔNG xóa cache mồ côi (URL không còn trong DB) trên server, S3, KV")
+	force := fs.Bool("force", false, "bỏ qua kiểm tra DB cũ / số mồ côi vượt ngưỡng")
 	logPath := fs.String("log", "", "ghi kết quả từng URL ra JSONL")
 	fs.Parse(args)
 
@@ -92,10 +128,12 @@ func cmdRegenAll(args []string) {
 		paths = append(paths, p)
 	}
 	rows.Close()
+	lastFull, _ := strconv.ParseInt(store.Meta(db, "urls_full_last"), 10, 64)
 	db.Close()
 	if len(paths) == 0 {
 		die("DB không có URL active: chạy 'dott-cache urls sync' trước")
 	}
+	dbAge := time.Since(time.Unix(lastFull, 0))
 	keep := map[string]bool{}
 	for _, p := range paths {
 		keep[kv.Key(p)] = true
@@ -115,7 +153,7 @@ func cmdRegenAll(args []string) {
 		wg.Add(1)
 		go func(i int, c *s3.Client) {
 			defer wg.Done()
-			in := &s3Inventory{htmlKeep: map[string]bool{}}
+			in := &s3Inventory{htmlKeep: map[string]bool{}, orphanDirs: map[string]bool{}}
 			var man strings.Builder
 			err := c.List(ctx, c.T.Prefix, func(o s3.ListResult) {
 				fmt.Fprintf(&man, "%s\t%d\n", o.Key, o.Size)
@@ -124,18 +162,20 @@ func cmdRegenAll(args []string) {
 				if j := strings.LastIndex(rel, "/"); j >= 0 {
 					dir, file = "/"+rel[:j+1], rel[j+1:]
 				}
+				dir = kv.Key(dir)
 				switch {
+				case !keep[dir]:
+					in.orphan++ // mồ côi (mọi loại file)
+					in.orphanDirs[dir] = true
+					if *keepOrphans {
+						return
+					}
 				case file != "index-https.html":
 					in.other++ // bản mobile, _gzip...: xóa ngay từ đầu
-				case keep[dir]:
+				default:
 					in.html++
 					in.htmlKeep[dir] = true
 					return // giữ, upload sẽ ghi đè
-				default:
-					in.orphan++
-					if !*delOrphans {
-						return
-					}
 				}
 				in.keys = append(in.keys, o.Key)
 			})
@@ -153,38 +193,110 @@ func cmdRegenAll(args []string) {
 	if invErr != nil {
 		die("LIST S3: %v", invErr)
 	}
+	maxOrphans := 0
 	for i, c := range clients {
-		fmt.Printf("[1] S3 %s: index-https.html của URL trong DB %d (giữ, sẽ ghi đè), file khác (mobile, _gzip) %d, html mồ côi %d → sẽ xóa %d object\n",
-			c.T.ID, inv[i].html, inv[i].other, inv[i].orphan, len(inv[i].keys))
+		fmt.Printf("[1] S3 %s: index-https.html của URL trong DB %d (giữ, sẽ ghi đè), file kiểu cũ (mobile, _gzip) %d, mồ côi %d file / %d path → sẽ xóa %d object\n",
+			c.T.ID, inv[i].html, inv[i].other, inv[i].orphan, len(inv[i].orphanDirs), len(inv[i].keys))
+		maxOrphans = max(maxOrphans, len(inv[i].orphanDirs))
+		ds := make([]string, 0, len(inv[i].orphanDirs))
+		for d := range inv[i].orphanDirs {
+			ds = append(ds, d)
+		}
+		sort.Strings(ds)
+		if len(ds) > 0 {
+			fmt.Printf("      mồ côi: %s\n", sample(ds))
+		}
+	}
+	// KV: key không có trong tập path active.
+	var kvc *kv.Client
+	var kvOrphans []string
+	if cfg.KV.NamespaceID != "" {
+		envPath := cfg.KV.CFEnv
+		if envPath == "" {
+			envPath = home() + "/config/secrets/cf.env"
+		}
+		env := loadEnv(envPath)
+		kvc = kv.New(env["CF_API_TOKEN"], env["CF_ACCOUNT_ID"], cfg.KV.NamespaceID)
+		ks, err := kvc.ListKeys(ctx, "")
+		if err != nil {
+			die("list KV: %v", err)
+		}
+		for _, k := range ks {
+			if !keep[k] {
+				kvOrphans = append(kvOrphans, k)
+			}
+		}
+		sort.Strings(kvOrphans)
+		fmt.Printf("[1] KV: %d key, mồ côi %d %s\n", len(ks), len(kvOrphans), sample(kvOrphans))
+		maxOrphans = max(maxOrphans, len(kvOrphans))
 	}
 	if _, _, err := runRemote(ctx, cfg.Renew.SSHHost, cfg.Renew.Command+" --purge-cache --dry-run", "purge", paths, nil); err != nil {
 		die("kiểm kê server: %v", err)
 	}
 	fmt.Printf("[1] server (trước): %s  (%.1f s)\n", lastPurge, time.Since(t).Seconds())
+	maxOrphans = max(maxOrphans, purgeNum("path_mồ_côi"))
+
+	// Hai lớp chặn trước khi xóa mồ côi.
+	maxPct := cfg.URLs.MaxRemovePct
+	if maxPct <= 0 {
+		maxPct = 2
+	}
+	var stopWhy []string
+	if !*keepOrphans {
+		if lastFull == 0 || dbAge > 26*time.Hour {
+			stopWhy = append(stopWhy, fmt.Sprintf("DB chưa được 'urls sync' toàn bộ trong 26 giờ qua (lần cuối: %s)", ageStr(lastFull, dbAge)))
+		}
+		if float64(maxOrphans)*100/float64(len(paths)) > maxPct {
+			stopWhy = append(stopWhy, fmt.Sprintf("số path mồ côi %d (%.1f%% số URL) vượt ngưỡng %.1f%%", maxOrphans, float64(maxOrphans)*100/float64(len(paths)), maxPct))
+		}
+	}
+	fmt.Printf("[1] DB: urls sync toàn bộ lần cuối %s; mồ côi nhiều nhất %d path (%.2f%%, ngưỡng %.1f%%)\n",
+		ageStr(lastFull, dbAge), maxOrphans, float64(maxOrphans)*100/float64(len(paths)), maxPct)
+	if len(stopWhy) > 0 && !*force {
+		for _, s := range stopWhy {
+			fmt.Println("    DỪNG: " + s)
+		}
+		fmt.Println("    Chạy 'dott-cache urls sync' rồi thử lại; hoặc -keep-orphans (không xóa mồ côi); hoặc -force nếu đã kiểm tra.")
+		if *yes {
+			os.Exit(1)
+		}
+	}
 	if !*yes {
 		fmt.Println("\nChưa xóa hay ghi gì. Chạy lại với -yes để thực hiện.")
 		return
 	}
 
-	// ---- 2. Dọn server ----
+	// ---- 2. Xóa KV mồ côi TRƯỚC ----
+	if kvc != nil && len(kvOrphans) > 0 && !*keepOrphans {
+		t = time.Now()
+		failed, err := kvc.DeleteBulk(ctx, kvOrphans)
+		fmt.Printf("[2] KV: xóa %d key mồ côi, API báo lỗi %d %s (%.1f s)\n", len(kvOrphans), len(failed), errStr(err), time.Since(t).Seconds())
+	} else {
+		fmt.Println("[2] KV: không có gì cần xóa")
+	}
+
+	// ---- 3. Dọn server ----
 	t = time.Now()
 	pc := cfg.Renew.Command + " --purge-cache"
 	if *purgeFirst {
 		pc += " --all"
 	}
+	if *keepOrphans {
+		pc += " --keep-orphans"
+	}
 	if _, _, err := runRemote(ctx, cfg.Renew.SSHHost, pc, "purge", paths, nil); err != nil {
 		die("dọn server: %v", err)
 	}
-	fmt.Printf("[2] dọn server: %s (%.1f s)\n", lastPurge, time.Since(t).Seconds())
+	fmt.Printf("[3] dọn server: %s (%.1f s)\n", lastPurge, time.Since(t).Seconds())
 
-	// ---- 3. Xóa S3 theo lô ----
+	// ---- 4. Xóa S3 theo lô ----
 	t = time.Now()
 	for i, c := range clients {
 		wg.Add(1)
 		go func(c *s3.Client, keys []string) {
 			defer wg.Done()
 			n, fails := deleteKeys(ctx, c, keys, 4)
-			fmt.Printf("[3] S3 %s: xóa %d/%d object, lỗi %d (%.1f s)\n", c.T.ID, n, len(keys), len(fails), time.Since(t).Seconds())
+			fmt.Printf("[4] S3 %s: xóa %d/%d object, lỗi %d (%.1f s)\n", c.T.ID, n, len(keys), len(fails), time.Since(t).Seconds())
 			for k, e := range fails {
 				fmt.Printf("      %s: %s\n", k, e)
 				break
@@ -193,7 +305,7 @@ func cmdRegenAll(args []string) {
 	}
 	wg.Wait()
 
-	// ---- 4. Prefork theo lô + upload song song ----
+	// ---- 5. Prefork theo lô + upload song song ----
 	cfg.Origin.MinCachedAt = start.Unix() - 5
 	col := newCollector(*logPath)
 	tRender := time.Now()
@@ -219,7 +331,7 @@ func cmdRegenAll(args []string) {
 		t0 := time.Now()
 		ok, failed, err := runRemoteQuiet(ctx, cfg.Renew.SSHHost, cfg.Renew.Command, b, col.ch)
 		if err != nil {
-			fmt.Printf("[4] lô %d/%d: LỖI %v\n", i / *batch + 1, nb, err)
+			fmt.Printf("[5] lô %d/%d: LỖI %v\n", i / *batch + 1, nb, err)
 		}
 		var retry []string
 		for p, e := range failed {
@@ -230,16 +342,16 @@ func cmdRegenAll(args []string) {
 		sort.Strings(retry)
 		okTotal += len(ok)
 		retryTotal += len(retry)
-		fmt.Printf("[4] lô %d/%d: prefork %d/%d ok, %d thử lại bằng HTTP, %.1f s (%.1f URL/s)\n",
+		fmt.Printf("[5] lô %d/%d: prefork %d/%d ok, %d thử lại bằng HTTP, %.1f s (%.1f URL/s)\n",
 			i / *batch + 1, nb, len(ok), len(b), len(retry), time.Since(t0).Seconds(), float64(len(ok))/time.Since(t0).Seconds())
 		upQ <- append(ok, retry...)
 	}
 	close(upQ)
 	<-upDone
 	all := col.finish()
-	fmt.Printf("[4] prefork + upload: %.1f s (upload chạy song song, tổng thời gian upload %.1f s)\n", time.Since(tRender).Seconds(), tUpload.Seconds())
+	fmt.Printf("[5] prefork + upload: %.1f s (upload chạy song song, tổng thời gian upload %.1f s)\n", time.Since(tRender).Seconds(), tUpload.Seconds())
 
-	// ---- 5. Kiểm tra lại ----
+	// ---- 6. Kiểm tra lại ----
 	t = time.Now()
 	for _, c := range clients {
 		have, other, orphanHTML, fresh := 0, 0, 0, 0
@@ -268,7 +380,7 @@ func cmdRegenAll(args []string) {
 			}
 		}
 		sort.Strings(missing)
-		fmt.Printf("[5] S3 %s: có index-https.html %d/%d URL (ghi mới lần này %d), file khác còn lại %d, html mồ côi %d",
+		fmt.Printf("[6] S3 %s: có index-https.html %d/%d URL (ghi mới lần này %d), file khác còn lại %d, html mồ côi %d",
 			c.T.ID, have, len(keep), fresh, other, orphanHTML)
 		if len(missing) > 0 {
 			fmt.Printf(", thiếu: %s", strings.Join(missing[:min(5, len(missing))], " "))
@@ -276,7 +388,7 @@ func cmdRegenAll(args []string) {
 		fmt.Println()
 	}
 	runRemote(ctx, cfg.Renew.SSHHost, cfg.Renew.Command+" --purge-cache --dry-run", "purge", paths, nil)
-	fmt.Printf("[5] server (sau): %s (%.1f s)\n", lastPurge, time.Since(t).Seconds())
+	fmt.Printf("[6] server (sau): %s (%.1f s)\n", lastPurge, time.Since(t).Seconds())
 
 	summary(all, time.Since(start), cfg.Targets)
 	bad := failedPaths(paths, all, len(clients))
