@@ -1,7 +1,8 @@
 # Hướng dẫn cho Claude Code – Cache System v2
 
 - Trả lời chủ site bằng **tiếng Việt**.
-- Bắt đầu mỗi hội thoại: đọc `HANDOFF.md` và `docs/INVENTORY-2026-11-28.md`. Các tài liệu khác (`docs/rollout-log.md` rất dài, `docs/design-server-only.md`, `docs/HISTORY.md`) chỉ đọc phần cần tra cứu.
+- Bắt đầu mỗi hội thoại: đọc `HANDOFF.md`. Khi làm phần sự kiện/pool thì đọc thêm `docs/design-pool.md`. Các tài liệu khác (`docs/rollout-log.md` rất dài, `docs/SUMMARY-*.md`, `docs/INVENTORY-2026-11-28.md`, `docs/design-server-only.md`, `docs/HISTORY.md`) chỉ đọc phần cần tra cứu.
+- Claude không nhập mật khẩu đăng nhập web: chủ site tự đăng nhập trong browser pane.
 - Skill có sẵn trong `.claude/skills/`: `vps-diaocthongthai` (VPS chính, có mật khẩu) và `vps-claude-control` (VPS phụ).
 
 ## Quy tắc an toàn (bắt buộc)

@@ -1,111 +1,104 @@
-# HANDOFF – Cache System v2 (cập nhật 2026-11-28 13:20)
+# HANDOFF – Cache System v2 (cập nhật 2026-11-28 18:10)
 
-> Điểm bắt đầu cho hội thoại mới. **Chỉ cần đọc file này và [docs/INVENTORY-2026-11-28.md](docs/INVENTORY-2026-11-28.md).**
-> Tài liệu khác chỉ đọc khi cần tra cứu:
-> - [docs/rollout-log.md](docs/rollout-log.md): nhật ký và số đo từng bước (dài);
-> - [docs/design-pool.md](docs/design-pool.md): **kiến trúc sự kiện + pool** (thay mục 7, 11 của design-server-only);
-> - [docs/design-server-only.md](docs/design-server-only.md): thiết kế, mục 11b là bố cục thư mục;
-> - [docs/HISTORY.md](docs/HISTORY.md): mốc, tag, những điều từng hiểu sai;
-> - [docs/design-tt-core.md](docs/design-tt-core.md): theme tt-core.
+> Điểm bắt đầu cho hội thoại mới. **Đọc file này trước.** Tra cứu khi cần:
+> - [docs/SUMMARY-2026-11-28.md](docs/SUMMARY-2026-11-28.md): tổng kết ngày 28/11 (đã làm gì, kết quả);
+> - [docs/design-pool.md](docs/design-pool.md): **kiến trúc sự kiện + pool** (hướng hiện tại);
+> - [docs/rollout-log.md](docs/rollout-log.md): nhật ký và số đo từng bước (dài, chỉ đọc phần cần);
+> - [docs/INVENTORY-2026-11-28.md](docs/INVENTORY-2026-11-28.md): kiểm kê trước rollout (một phần đã cũ);
+> - [docs/design-server-only.md](docs/design-server-only.md) (mục 11b: bố cục thư mục), [docs/design-tt-core.md](docs/design-tt-core.md), [docs/HISTORY.md](docs/HISTORY.md).
 
 ## 1. Hệ thống trong 1 phút
 
 | | VPS chính (production) 45.77.32.177:8282 | VPS phụ `claude-control` 139.180.158.221 |
 |---|---|---|
-| Vai trò | WordPress multisite diaocthongthai.com (blog 1 vi `/`, blog 2 en `/en/`, bỏ qua `/es/`), WP Rocket 3.16, nginx + rocket-nginx, Redis | Tool Go `dott-cache`: danh sách URL (SQLite), tạo cache (gọi prefork trên VPS chính qua SSH), upload S3, Cloudflare KV |
-| Truy cập | `python vps.py run "..."` (skill `vps-diaocthongthai`) | `ssh claude-control "..."`; từ VPS phụ sang VPS chính: `ssh main` |
-| Thư mục | `wp-content/mu-plugins/dott-cache/*.php` (trong site), `/usr/local/sbin/dott-prefork` (bộ chuyển lệnh của root) | `/root/tool/cache-system/{bin,src,config/{sites,secrets},data,logs,lists,test}` |
-| Site test | php81.congtoan.net (blog 3 `/tttest/` vi, blog 4 `/tttest-en/` en), bucket `congtoanphp` (Chicago + Frankfurt), KV `php81-cache-test`, Worker `dott-cache-php81-test.congtoan-real.workers.dev` | |
+| Vai trò | WordPress multisite diaocthongthai.com (blog 1 vi `/`, blog 2 en `/en/`, bỏ qua `/es/`), WP Rocket 3.16, nginx + rocket-nginx | Tool Go `dott-cache`: render (prefork qua SSH), upload S3, Cloudflare KV, service `serve` (sự kiện + pool) |
+| Truy cập | `python vps.py run "..."` (skill `vps-diaocthongthai`) | `ssh claude-control "..."`; từ VPS phụ: `ssh main` (key root, `no-port-forwarding`), `ssh main-tunnel` (chỉ để tunnel) |
+| Thư mục | `wp-content/mu-plugins/dott-cache/*.php`, `mu-plugins/dott-single-cache.php`, `mu-plugins/dott-cache-events.php` (chỉ php81), `/usr/local/sbin/dott-prefork` | `/root/tool/cache-system/{bin,src,config/{sites,secrets},data,logs,lists,test}` |
+| Site test | php81.congtoan.net (blog 3 `/tttest/`, blog 4 `/tttest-en/`), bucket `congtoanphp`, KV `php81-cache-test` | |
 
-**Hướng v2 (đã chốt):**
-- Một bản HTML cho mọi thiết bị: theme tt-core (`theme/`), mu-plugin `dott-single-cache`, plugin sticky 3.2.0.
-- nginx trả thẳng file cache. Chỉ upload `index-https.html` lên S3.
-- Worker v2 chọn bucket theo châu lục.
-- Tạo cache bằng prefork. Chạy theo lịch: `sync` 8 giờ/lần, `sync -full` hằng ngày, `update -all` hằng tháng.
-- **Chuyển production từng blog:** vi (`-blog /`) trước, kiểm tra xong mới tới en (`-blog /en/`).
+**Hướng v2:**
+- Một bản HTML cho mọi thiết bị: theme tt-core, mu-plugin `dott-single-cache`, sticky 3.2.0.
+- nginx trả thẳng file cache; S3 chỉ có `index-https.html`; Worker v2 chọn bucket theo châu lục.
+- **Cập nhật theo sự kiện** (mu-plugin → tunnel → `serve` → pool) + **đối soát hằng ngày** (`reconcile`) + **toàn site hằng tháng** (`submit -all`). Bỏ lịch `sync` 8 giờ/lần.
+- Site là nguồn sự thật; KV/S3/đĩa là trạng thái thật; `state.db` (danh sách URL) sẽ bỏ sau khi pool chạy ổn trên production.
+- Chuyển production từng blog: **vi đã chuyển (28/11)**, en làm lần 2.
 
 ## 2. Lệnh `dott-cache` (VPS phụ)
 ```
-dott-cache urls sync|list|stats -site <domain> ...          danh sách URL (SQLite data/<domain>/state.db)
-dott-cache update -site <domain> -all [-blog /] [-yes]       tạo lại toàn site/blog (không -yes: chỉ kiểm kê)
-dott-cache update -site <domain> -url|-urls|-txt|-segment ... [-blog]   một danh sách
-dott-cache sync -site <domain> -blog / [-full] [-dry-run]    thay đổi trên site → cache, S3, KV (chạy theo lịch)
-dott-cache replace -site <domain> -content|-version <phạm vi> [-yes]    sửa nhanh file cache, upload lại S3
-dott-cache kv create|list|sync -site <domain>
+# Pool (docs/design-pool.md); cần dott-cache-serve đang chạy
+dott-cache serve -sites a.com[,b.com] [-listen 127.0.0.1:8790]      (systemd dott-cache-serve.service)
+dott-cache submit -site <d> -url|-urls|-txt ... [-remove] [-prio 3] | -all -blog /
+dott-cache pool status
+dott-cache reconcile -site <d> -blog / [-dry-run] [-max-pct 2] [-force]
+# CLI cũ (đọc state.db); bị từ chối khi serve đang giữ khóa site đó
+dott-cache urls sync|list|stats ...; update -all|-url|-txt|-segment ... -blog / [-yes]; sync; replace; kv ...
 ```
-Chạy `dott-cache` không tham số để xem đủ cờ.
-- Điều tiết theo load: `max_load` 1,5 (chủ site chốt).
-- Khóa theo site: 2 lệnh ghi không chạy chồng nhau.
+- Điều tiết theo load `max_load` 1,5 cho lô prefork; lô sự kiện ≤ 4 URL (HTTP) không chờ load.
 - `write_blogs` trong config: chỉ cho ghi các blog được liệt kê.
+- Log `serve`: `journalctl -u dott-cache-serve`, kết quả từng URL `logs/<site>/serve-YYYYMMDD.jsonl`.
 
-## 3. Trạng thái production (28/11 13:20)
+## 3. Trạng thái (28/11 18:10)
 
+**Production site vi (blog 1): đã chuyển.**
 | Thành phần | Trạng thái |
 |---|---|
-| rocket-nginx + `open_file_cache off` | **Đang chạy** (`/etc/nginx/extra/rocket-page-cache.conf`). Thư mục còn `.mobile-active` thì vẫn đi qua PHP như cũ |
-| `mu-plugins/dott-cache/` | `prefork-render.php` (P1), `export-urls.php` (có `--ids`) và `replace-cache.php` (P4, 28/11) |
-| **WP Rocket config blog 1** | **Đã tạo lại 28/11 17:05: `do_caching_mobile_files = 0`** (một bản cache cho mọi thiết bị). en vẫn tách mobile. Backup `/root/backup-p4-2026-11-28/` |
-| `/usr/local/sbin/dott-prefork` | Có `diaocthongthai.com` |
-| **mu-plugin `dott-single-cache.php`** | **Đã cài và bật cho blog 1** (`DOTT_SINGLE_CACHE_BLOGS = array(1)`, 28/11 13:17). Option khi đọc ra: blog 1 `do_caching_mobile_files=0`, blog 2 `=1`. **File `wp-rocket-config/diaocthongthai.com.php` CHƯA được tạo lại** (vẫn `do_caching_mobile_files = 1`, 09/03), nên cách phục vụ cache chưa đổi. Xem cảnh báo ở mục 4 |
-| Theme | **vi: generatepress_child v0.7.0 có tt-core, đã build (28/11 16:58, P2 xong).** Bản render mới dùng một `core.js` cho desktop và mobile. en: chưa có tt-core. Backup `/root/backup-p2-2026-11-28/` |
-| Plugin sticky | **3.2.0 (P3 xong)**; module trong build tt-core của vi; en chạy như cũ |
-| 8 bài vi test | Đã xóa cache trên server rồi tạo lại bằng prefork: chỉ còn `.html` và `_gzip`, nginx trả HIT cho cả mobile. Khách mobile của 8 bài này nhận JS desktop cho tới P2. Danh sách: `test/t8-prod/list.txt` trên VPS phụ |
-| Config `config/sites/diaocthongthai.com.json` (VPS phụ) | Đích Chicago `cdn.diaocthongthai.com`, KV `cc831…` |
-| Worker production | **v2 từ 28/11 17:45** (script `thongthai-cache`, route `diaocthongthai.com/*`): NA/SA → S3 Chicago, `LEGACY_PREFIXES ["/en/"]`. Quay lại v7: `deploy/worker/deploy-production.sh rollback` (bản v7 ở VPS phụ `test/p7/v7-live/`) |
-| Cron cũ, screen | **Đã xóa / đóng (P5, 28/11).** Backup crontab `/root/backup-p5-2026-11-28/` |
-| Config VPS phụ | `write_blogs: ["/"]` (P6) |
-| KV production | 60.687 key, không còn key dạng URL đầy đủ |
+| Theme | generatepress_child **v0.7.0** (tt-core, build 19 module, `core.js?ver=62d9b17e24`). Backup `/root/backup-p2-2026-11-28/` |
+| Plugin sticky | **3.2.0** (network). Module sticky trong build vi; en chạy như cũ |
+| WP Rocket config blog 1 | Tạo lại 17:05: `do_caching_mobile_files = 0`. Backup `/root/backup-p4-2026-11-28/` |
+| mu-plugins | `dott-single-cache.php` (blog 1), `dott-cache/{prefork-render,export-urls (--ids),replace-cache}.php` |
+| Cron cũ, screen | **Đã xóa / đóng** (P5). Backup `/root/backup-p5-2026-11-28/crontab-root.txt` |
+| **P6 `update -all -blog /`** | **Đang chạy nền** từ 17:12 (`systemd-run` unit `dott-p6-vi` trên VPS phụ, log `logs/diaocthongthai.com/p6-update-all-vi.txt`). Đã dọn S3/server/KV; đang render 24.273 URL (lô 10/122 lúc 18:05, 2–2,8 URL/s, dự kiến xong khoảng 20:30–21:00). 1 URL prefork lỗi do wpdatatables ghi file tạm (`tempfile*.csv`, không có quyền ghi), đã thử lại bằng HTTP |
+| Worker | **v2 từ 17:45** (script `thongthai-cache`, route `diaocthongthai.com/*`): NA/SA → S3 Chicago `cdn.diaocthongthai.com`, châu khác → origin, `LEGACY_PREFIXES ["/en/"]`. Quay lại v7: `bash deploy/worker/deploy-production.sh rollback` trên VPS phụ (bản v7 ở `test/p7/v7-live/`) |
+| Config VPS phụ | `write_blogs: ["/"]` |
+| Pool production | **Chưa bật** (chưa có mu-plugin events, file hook; `serve` chỉ phục vụ php81) |
 
-## 4. Việc tiếp theo (theo thứ tự)
+**Site en (blog 2):** chưa đổi gì: theme không tt-core, WP Rocket vẫn tách mobile, S3 vẫn có file kiểu cũ; Worker phục vụ kiểu v7 (`LEGACY_PREFIXES`).
 
-**Lần 1, site vi (`-blog /`):**
-1. ~~P2~~ xong 28/11 (rollout-log "P2 + P3 production site vi").
-2. ~~P3~~ xong 28/11.
-3. ~~P4~~ xong 28/11 17:05 (rollout-log "P4 production site vi"). Thư mục còn `.mobile-active` giờ được PHP trả **bản desktop cũ (JS desktop cũ)** cho khách mobile, cho tới khi cache được tạo lại ở P6, nên **nên làm P5–P7 sớm**.
-4. ~~P5~~ xong 28/11 17:10. ~~P6~~ chạy từ 17:12 (xem rollout-log). ~~P7~~ xong 28/11 17:45. **Kế tiếp: P8** (bật pool cho production thay timer cũ) sau khi P6 xong và kiểm tra.
-   Nội dung gốc của các bước (để tra cứu):
-   **P5:** tắt phần vi của 2 cron cũ (hoặc tắt hẳn nếu chấp nhận en không còn cron cũ). Dừng các screen sót (`en-map-of`, `F1`, `F2`).
-5. **P6:**
-   - Đổi config VPS phụ thành `write_blogs: ["/"]`.
-   - `dott-cache urls sync -site diaocthongthai.com` (cần `export-urls.php` ở P4).
-   - `update -all -blog /` (chạy kiểm kê trước, rồi `-yes`).
-   - Số liệu kiểm kê 28/11: 24.273 URL; S3 có 72.089 file kiểu cũ sẽ xóa; server có 66.468 file mobile; mồ côi 0,46%.
-   - Thời gian ước tính 1,5–2 giờ, chưa tính thời gian nghỉ do điều tiết.
-6. **P7 (làm ngay sau P6):** deploy Worker v2 lên route production với `REDIRECTS=1`, `LEGACY_PREFIXES=["/en/"]`, `TARGETS={"NA","SA": Chicago}`. Lý do: sau P6 không còn bản mobile và `_gzip` của vi trên S3, nên Worker v7 sẽ đưa khách châu Mỹ của vi về origin. Cần token Cloudflare có quyền Workers Scripts + Workers Routes.
-7. **P8:** cài systemd (`deploy/systemd/`, instance `vi`): `sync` 8 giờ/lần, `sync-full` hằng ngày, `update-all` hằng tháng.
+**VPS phụ:**
+- `dott-cache-serve.service` (`-sites php81.congtoan.net`) và `dott-cache-tunnel.service` đang chạy, **chưa enable**.
+- `serve` giữ khóa site php81: lệnh ghi CLI cho php81 bị từ chối (dùng `submit` hoặc dừng serve).
+- Key tunnel `/root/.ssh/id_dott_tunnel`, alias `main-tunnel`. Trên VPS chính: `restrict,port-forwarding,permitlisten="127.0.0.1:8790",permitopen="127.0.0.1:1",command="/bin/false"`. Backup `authorized_keys.bak-2026-11-28-1626`.
+- Token hook php81: `config/secrets/hook-php81.congtoan.net.token`; trên site: `/home/php81conZSI/php81.congtoan.net/dott-cache-hook.json`.
 
-**Lần 2, site en (`-blog /en/`):** theme `generatepress_en` + build → `DOTT_SINGLE_CACHE_BLOGS = array(1, 2)` + tạo lại config `.en` → `write_blogs: ["/", "/en/"]` → `update -all -blog /en/` → bỏ `LEGACY_PREFIXES` trong Worker → timer instance `en`.
+## 4. Việc tiếp theo
+1. **Khi P6 xong** (`systemctl is-active dott-p6-vi` = inactive):
+   - đọc cuối log `p6-update-all-vi.txt` (số ok/lỗi, kiểm tra lại);
+   - `dott-cache reconcile -site diaocthongthai.com -blog / -dry-run` (không cần serve khi dry-run) để xem thiếu/mồ côi;
+   - kiểm tra vài URL desktop/iPhone (nginx HIT, `core.js`), S3 không còn mobile/`_gzip`;
+   - ghi kết quả vào rollout-log mục P6.
+2. **P8, bật pool cho production site vi** (hỏi chủ site trước):
+   - token `hook-diaocthongthai.com.token`, file `/home/diaocthDP4f/diaocthongthai.com/dott-cache-hook.json` (600, user site);
+   - cài `mu-plugins/dott-cache-events.php` vào production;
+   - `serve -sites php81.congtoan.net,diaocthongthai.com` (sửa unit), `systemctl enable --now dott-cache-serve dott-cache-tunnel`;
+   - cài `dott-cache-reconcile@vi.timer` (03:30), hằng tháng `dott-cache-blog.sh vi submit-all`;
+   - test: sửa một bài vi và xem log serve. Lưu ý `serve` sẽ giữ khóa site production, nên CLI `update` phải chạy qua `submit`.
+3. **Đo** tốc độ khách Việt Nam với Worker v2 (châu Á vào origin) so với trước.
+4. **Lần 2, site en:** theme `generatepress_en` v0.7.0 + build → `DOTT_SINGLE_CACHE_BLOGS = array(1, 2)` + tạo lại config `.en` → `write_blogs: ["/", "/en/"]` → `submit -all -blog /en/` (hoặc `update -all`) → bỏ `LEGACY_PREFIXES` trong Worker.
+5. Sau khi pool ổn: bỏ `state.db`, `urls sync`, `sync`, lệnh `renew`, `regen-all`; dọn php81 (theo ý chủ site).
 
-**Kiến trúc pool (chủ site chốt 28/11): [docs/design-pool.md](docs/design-pool.md).**
-- WordPress (mu-plugin mỏng) POST sự kiện qua SSH reverse tunnel → `dott-cache serve` trên VPS phụ → pool SQLite có ưu tiên → một worker render, upload S3 nhiều luồng, KV.
-- Bỏ lịch `sync` 8 giờ/lần; bản "đọc file sự kiện mỗi phút" đã bỏ.
-- Site là nguồn sự thật, KV/S3/đĩa là trạng thái thật. `state.db` (danh sách URL) sẽ bỏ ở đợt sau.
-- Thứ tự: test trên php81 → P6–P7 production bằng CLI hiện tại → bật `serve` + tunnel + plugin thay cho P8.
-- **Trạng thái 28/11 16:25:** đã cài và test trên php81 (rollout-log "Pool: triển khai và test trên php81"). `dott-cache-serve` đang chạy trên VPS phụ cho php81 (chưa enable; nó giữ khóa site php81, nên lệnh ghi CLI cho php81 bị từ chối: dùng `submit`, hoặc `systemctl stop dott-cache-serve`). Tunnel chạy bằng key riêng `id_dott_tunnel` (alias `main-tunnel`; trên VPS chính chỉ được mở `127.0.0.1:8790`, không chạy lệnh). Đường thật WordPress → tunnel → serve: **8–13 s** từ lúc lưu tới khi có trên S3 và KV. `serve` và `tunnel` chưa `enable` (reboot thì không tự chạy).
-- **Việc kế tiếp:** P2–P7 production như cũ. Khi bật pool cho production: thêm `diaocthongthai.com` vào `-sites`, cài plugin + `export-urls.php` mới + file hook, `write_blogs` như lúc đó, `systemctl enable` 2 unit. Chưa test qua trình duyệt (Gutenberg), phân trang thật, nhiều site trong một serve.
-
-**Còn mở, không chặn rollout:**
-- Lưu trạng thái render/upload từng URL vào DB, rồi thêm `dott-cache status`.
-- Báo Telegram (dùng chung bot với `/root/health`).
-- Lệnh kiểm tra riêng, chỉ đọc.
-- Key SSH riêng cho service (`command=` bộ chuyển lệnh); key S3 riêng; token Cloudflare hẹp hơn; **đổi 2 token Cloudflare đã dán trong hội thoại 28/11**.
-- Bucket Frankfurt cho production (nếu muốn phục vụ khách EU từ S3).
-- Sau khi xong: dọn php81 (site test, Worker workers.dev, KV test, bucket `congtoanphp`), bỏ lệnh cũ `renew` và `regen-all`.
+**Còn mở:**
+- Chủ site **đổi mật khẩu** đăng nhập diaocthongthai.com và php81 (đã dán trong hội thoại 28/11), và **đổi 2 token Cloudflare** đã dán ngày 28/11.
+- Báo Telegram (dùng chung bot `/root/health`); key S3 riêng; token Cloudflare hẹp hơn; bucket Frankfurt nếu muốn phục vụ EU từ S3.
+- wpdatatables ghi file tạm vào thư mục hiện hành khi prefork: xem có cần `chdir` vào thư mục ghi được trong `prefork-render.php` không.
+- Khi có bài mới, chỉ trang 1 archive và trang phân trang mới được làm mới; các trang 2..N chờ `submit -all` hằng tháng.
 
 ## 5. Quy tắc (CLAUDE.md) và bẫy đã gặp
-- **Mọi thao tác ghi trên VPS chính phải hỏi chủ site trước**, và backup trước khi sửa. Chỉ đọc thì cứ làm.
-- Không in mật khẩu, key hay token. Key nằm trên VPS phụ ở `config/secrets/` (Claude trên VPS phụ bị cấm đọc). Trên PC, token nằm trong `secrets.json` (gitignored).
-- **Script dài chạy trên VPS:** viết file vào scratchpad, `scp` hoặc `python vps.py put` lên `/tmp`, chạy `sed -i 's/\r$//'` rồi `bash`. Không nhét lệnh nhiều dòng có `$`, `"`, `'` vào `ssh "..."` từ PowerShell.
-- **PowerShell:** không đặt tên hàm `R`/`rd`/`rm`… (trùng alias). Thay chuỗi hàng loạt thì dùng công cụ Edit, không dùng script (ngày 28/11 từng làm hỏng một file).
-- Trong script trên VPS phụ phải dùng `ssh -n main`. VPS chính đôi khi từ chối khi có nhiều kết nối SSH liền nhau; `dott-cache` đã tự thử lại.
-- Build Go trên VPS phụ: `cd /root/tool/cache-system/src && GOMEMLIMIT=300MiB GOFLAGS=-p=1 go build -o ../bin/dott-cache ./cmd/dott-cache`. Nguồn sửa ở repo rồi `scp` lên `src/`.
-- **So bản prefork với bản HTTP:** phải so với file cache do request thường tạo, không so với bản có query string (`?dottprobe` không qua bước tối ưu của WP Rocket).
-- Multisite: `wp --url=X plugin activate` với plugin có `Network: True` sẽ bật cho toàn mạng. Sau mỗi thay đổi, kiểm tra mọi blog.
-- WP Rocket: không được đặt `cache_mobile=0`, vì khách mobile sẽ mất cache. File `wp-rocket-config/<host>[.<blog>].php` chỉ được tạo lại khi lưu thiết lập.
-- Cloudflare KV bulk delete có thể sót key, nên luôn list lại để kiểm tra (tool đã làm).
+- **Mọi thao tác ghi trên VPS chính phải hỏi chủ site trước**, và backup trước khi sửa. Chỉ đọc thì cứ làm. **Claude không nhập mật khẩu**: chủ site tự đăng nhập trong browser pane.
+- Không in mật khẩu, key hay token. Secret trên VPS phụ ở `config/secrets/`; trên PC ở `secrets.json` (gitignored). **Không `git add -A`**: add từng file.
+- **Script chạy trên VPS:** viết file vào scratchpad, `scp` lên VPS phụ, `sed -i 's/\r$//'`, rồi `bash` (hoặc `ssh main bash -s < file`). Không nhét lệnh có `$`, `"`, `'`, `|` vào `ssh "..."` từ PowerShell (hỏng nhiều lần).
+- Commit message có dấu ngoặc kép: dùng `git commit -F <file>`.
+- Trong script trên VPS phụ dùng `ssh -n main`. VPS chính đôi khi từ chối khi nhiều kết nối liền nhau; script test phải dừng khi đọc thiếu dữ liệu.
+- Build Go trên VPS phụ: `cd /root/tool/cache-system/src && GOMEMLIMIT=300MiB GOFLAGS=-p=1 go build -o /tmp/dott-cache-new ./cmd/dott-cache`, rồi `install` vào `bin/` (backup bản cũ). Nguồn sửa ở repo rồi `scp` lên `src/`. Test: `go test ./internal/pool/`.
+- **KV đọc ra trễ tới khoảng 60 s**: không dùng KV GET để kiểm tra vừa ghi/xóa; dùng S3 (đọc ngay sau khi ghi là thấy).
+- **OpenSSH 8.2 trên VPS chính** không nhận `permitopen="none"` trong `authorized_keys` (bỏ qua cả dòng key).
+- OPcache `revalidate_freq=180`: sau khi sửa PHP hoặc config WP Rocket, đợi 3 phút rồi mới kiểm tra.
+- So bản prefork với bản HTTP: so với file cache do request thường tạo, không so với bản có query string.
+- WP Rocket: không đặt `cache_mobile=0`. File `wp-rocket-config/<host>[.<blog>].php` chỉ được tạo lại khi lưu thiết lập hoặc `rocket_generate_config_file()`.
+- Multisite: plugin `Network: True` bật cho toàn mạng; sau mỗi thay đổi kiểm tra mọi blog.
 
 ## 6. Git và nơi liên quan
-- Repo `congtoan/dott-cache-management` (private), nhánh `v2` (worktree này); `main` là Python cũ ở `D:\Claude\2026-11-25 Cache Management`. Tag mới nhất: `v2-tools-2026-11-28`.
-- Skill gốc `vps-diaocthongthai`: `D:\Claude\2026-11-25 Ket Noi VPS\`. VPS phụ: skill `vps-claude-control`.
-- Worker v7 đang chạy: `D:\Draft\2025-09-07 CF WORKER.JS\thongthai-cache-v7.js`.
-- Plugin sticky: `D:\Claude\2026-11-20 Sticky Sidebar Project\` (hướng dẫn tích hợp `tt-core-integration.md`).
+- Repo `congtoan/dott-cache-management` (private), nhánh `v2` (worktree này); `main` là Python cũ ở `D:\Claude\2026-11-25 Cache Management`.
+- Theme: repo private `congtoan/dott-generatepress-child` (tag v0.7.0), `dott-generatepress-en`; nguồn tt-core `theme/` trong repo này.
+- Plugin sticky: repo private `congtoan/cong-toan-multi-sticky-sidebar` (release v3.2.0, `DEPLOY.md`).
+- Worker v7 cũ: `D:\Draft\2025-09-07 CF WORKER.JS\thongthai-cache-v7.js`; bản v7 đang chạy trước 28/11 ở VPS phụ `test/p7/v7-live/worker.js`.
+- Skill `vps-diaocthongthai`: `D:\Claude\2026-11-25 Ket Noi VPS\`. VPS phụ: skill `vps-claude-control`.
