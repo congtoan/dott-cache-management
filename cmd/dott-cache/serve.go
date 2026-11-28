@@ -146,7 +146,7 @@ func cmdServe(args []string) {
 			serveSites[strings.ToLower(name)] = s
 		}
 		st, _ := s.pool.Stats()
-		logf("site %s: %d việc trong pool, %d sự kiện trong inbox, write_blogs %v", name, st.Total, st.Inbox, s.cfg.WriteBlogs)
+		logf("site %s: %d việc trong pool, %d sự kiện trong inbox, write_blogs %v, legacy_blogs %v", name, st.Total, st.Inbox, s.cfg.WriteBlogs, s.cfg.LegacyBlogs)
 	}
 
 	// TCP: chỉ /event và /health.
@@ -361,13 +361,30 @@ func (s *serveSite) blogOf(p string) string {
 	return best
 }
 
-// allowed: write_blogs của config.
+// allowed: write_blogs hoặc legacy_blogs của config.
 func (s *serveSite) allowed(p string) bool {
-	if len(s.cfg.WriteBlogs) == 0 {
+	if len(s.cfg.WriteBlogs) == 0 || s.isLegacy(p) {
 		return true
 	}
 	bp := s.blogOf(p)
 	for _, b := range s.cfg.WriteBlogs {
+		if strings.EqualFold(b, bp) {
+			return true
+		}
+	}
+	return false
+}
+
+// isLegacy: path thuộc blog kiểu cũ (legacy_blogs: tách bản mobile, Worker đọc theo LEGACY_PREFIXES).
+func (s *serveSite) isLegacy(p string) bool {
+	if len(s.cfg.LegacyBlogs) == 0 {
+		return false
+	}
+	bp := s.blogOf(p)
+	if bp == "" {
+		return false
+	}
+	for _, b := range s.cfg.LegacyBlogs {
 		if strings.EqualFold(b, bp) {
 			return true
 		}
@@ -691,21 +708,42 @@ func (s *serveSite) doRemove(ctx context.Context, items []pool.Item) {
 	}
 }
 
+// doRefresh: tách lô thành path blog một bản HTML và path blog kiểu cũ (legacy_blogs), xử lý riêng.
 func (s *serveSite) doRefresh(ctx context.Context, items []pool.Item, upWG *sync.WaitGroup) {
+	var normal, legacy []pool.Item
+	for _, it := range items {
+		if s.isLegacy(it.Path) {
+			legacy = append(legacy, it)
+		} else {
+			normal = append(normal, it)
+		}
+	}
+	if len(normal) > 0 {
+		s.refreshBatch(ctx, normal, upWG, false)
+	}
+	if len(legacy) > 0 && ctx.Err() == nil {
+		s.refreshBatch(ctx, legacy, upWG, true)
+	}
+}
+
+// refreshBatch: render → upload → KV cho một lô.
+// legacy: luôn xóa file + HTTP (không prefork: prefork-render chỉ tạo bản desktop), rồi lấy 2 bản:
+// UA desktop → index-https.html, UA mobile → index-mobile-https.html (WP Rocket của blog này còn tách mobile).
+func (s *serveSite) refreshBatch(ctx context.Context, items []pool.Item, upWG *sync.WaitGroup, legacy bool) {
 	paths := make([]string, len(items))
 	for i, it := range items {
 		paths[i] = it.Path
 	}
 	t0 := time.Now()
 	mode := "prefork"
-	if len(paths) <= 4 {
+	if len(paths) <= 4 || legacy {
 		mode = "http"
 	}
 	var st genStats
 	remoteLogs = nil // biến toàn cục của runRemote: không để dồn mãi trong service chạy lâu
-	if mode == "prefork" {
-		// Lô HTTP (≤ 4 URL) tốn CPU như vài khách truy cập: không chờ load, để sự kiện cập nhật ngay.
-		// Lô prefork (hàng loạt) vẫn điều tiết theo max_load.
+	if len(paths) > 4 {
+		// Lô ≤ 4 URL tốn CPU như vài khách truy cập: không chờ load, để sự kiện cập nhật ngay.
+		// Lô lớn hơn (prefork, hoặc HTTP của blog kiểu cũ) vẫn điều tiết theo max_load.
 		waitLoad(ctx, s.cfg, &st, s.name)
 	}
 	ucfg := s.cfg
@@ -783,9 +821,26 @@ func (s *serveSite) doRefresh(ctx context.Context, items []pool.Item, upWG *sync
 			}
 			close(done)
 		}()
+		var allMobile []result
 		runUpload(ctx, ucfg, toUpload, []string{"index-https.html"}, s.clients, ch)
 		close(ch)
 		<-done
+		if legacy && ctx.Err() == nil {
+			// Bản mobile: GET sau bản desktop (file desktop đã có, WP Rocket tạo thêm index-mobile-https.html).
+			mcfg := ucfg
+			mcfg.Origin.UserAgent = legacyMobileUA
+			chm := make(chan result, 256)
+			doneM := make(chan struct{})
+			go func() {
+				for r := range chm {
+					allMobile = append(allMobile, r)
+				}
+				close(doneM)
+			}()
+			runUpload(ctx, mcfg, toUpload, []string{"index-mobile-https.html"}, s.clients, chm)
+			close(chm)
+			<-doneM
+		}
 		if ctx.Err() != nil {
 			logf("%s: dừng giữa lúc upload %d URL, làm lại khi khởi động", s.name, len(toUpload))
 			return
@@ -793,6 +848,12 @@ func (s *serveSite) doRefresh(ctx context.Context, items []pool.Item, upWG *sync
 		bad := map[string]string{}
 		for _, p := range failedPaths(toUpload, all, len(s.clients)) {
 			bad[p] = "upload/fetch"
+		}
+		if legacy {
+			for _, p := range failedPaths(toUpload, allMobile, len(s.clients)) {
+				bad[p] = "upload/fetch (mobile)"
+			}
+			all = append(all, allMobile...)
 		}
 		for _, r := range all {
 			if !r.OK && r.Err != "" {
@@ -825,8 +886,12 @@ func (s *serveSite) doRefresh(ctx context.Context, items []pool.Item, upWG *sync
 			s.pool.Done(it)
 			s.logResult(it, "ok", "")
 		}
+		label := mode
+		if legacy {
+			label += ", kiểu cũ desktop+mobile"
+		}
 		logf("%s: lô %d URL (%s): render %.1f s, upload+KV %.1f s, ok %d, lỗi %d, KV thêm %d",
-			s.name, len(paths), mode, tRender.Seconds(), time.Since(t1).Seconds(), len(good), len(renderFail)+len(bad), kvAdded)
+			s.name, len(paths), label, tRender.Seconds(), time.Since(t1).Seconds(), len(good), len(renderFail)+len(bad), kvAdded)
 		wakeWorker()
 	}()
 }
@@ -961,6 +1026,11 @@ func handleSubmit(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if !s.allowed(it.Path) {
+			denied++
+			continue
+		}
+		// Blog kiểu cũ: mỗi URL 2 lần render HTTP, không prefork; không nhận cập nhật hàng loạt (mức 4).
+		if it.Action == "refresh" && it.Prio >= pool.PrioBulk && s.isLegacy(it.Path) {
 			denied++
 			continue
 		}

@@ -1,0 +1,13 @@
+[Unit]
+Description=dott-cache submit -all %i (hằng tháng → pool mức 4)
+After=network-online.target dott-cache-serve.service
+Requires=dott-cache-serve.service
+
+[Service]
+Type=oneshot
+# Chỉ export rồi gửi vào pool (vài chục giây); serve tự render dần theo load.
+ExecStart=/root/tool/cache-system/bin/dott-cache-blog.sh %i submit-all
+MemoryMax=300M
+Nice=10
+CPUQuota=50%
+TimeoutStartSec=30min
