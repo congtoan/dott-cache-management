@@ -752,5 +752,29 @@ Dữ liệu test để lại trên php81: excerpt của bài 150 có chữ "t0�
   - POST `admin-ajax.php` qua Cloudflare: 403 do **trang chặn của Cloudflare** (WAF/bot, trước Worker); thẳng origin: 200. Không liên quan Worker.
 - Chưa đo: tốc độ thực tế cho khách Việt Nam (v7 cho mọi châu lục lấy từ Chicago; v2 cho châu Á vào origin, nơi nginx trả thẳng file cache).
 
+### Lần 2 site en, bước 1–4: theme tt-core, một bản cache, Worker bỏ LEGACY_PREFIXES (28/11 18:14–18:33, chủ site duyệt cả chuỗi)
+- Phương án tạm `legacy_blogs` (pool ghi en kiểu tách mobile) **bỏ, không deploy** (commit revert `96dfbd9`): en chuyển hẳn trong ngày. Lỗi chủ site chỉ ra: `--delete-only` xóa `.mobile-active`, lấy bản desktop trước, nên request iPhone sau đó có thể bị nginx trả bản desktop.
+- **Bước 1, theme `generatepress_en` v0.7.0** (tag `9102122`):
+  - Kiểm tra trước (md5 sau khi bỏ `\r`): `functions.php` `433782e8…`, `thongthai-desktop.js` `2d3a3183…`, `thongthai-mobile.js` `60aba364…` trùng bản chụp `theme/tools/legacy-2026-11-27/generatepress_en/`; `thongthai-script.js` trùng tag. Theme chưa có `tt-core`.
+  - Backup `/root/backup-en-2026-11-28/generatepress_en.tgz` (26 mục, ngoài `themes/`). Gói `git archive` (`core.autocrlf=false`): `functions.php`, `LEGACY-FILES.md`, `tt-core/` (190 file), md5 gói khớp 2 đầu.
+  - `php -l` mọi file PHP trước khi chép; `functions.php` ghi `.new` rồi `mv` (md5 mới `f3efd6c1…`). Chỉ chown/chmod file mới (site user, 755/644); các file cũ thuộc root giữ nguyên chủ sở hữu.
+  - Build blog 2: `lss_generate()`, `wp --url=…/en/ tt-core build`: ver `1cc3bb7b7f`, 20.510 byte (gốc 38.491), minified, checked, **9 module** gồm `600 ct-multi-sticky-sidebar desktop 3.2.0-1795864604 plugin yes`. Blog 1 vẫn `62d9b17e24`.
+- **Bước 2, test theme en** (sau 3 phút OPcache):
+  - `/en/`, 4 bài, 1 chuyên mục: 200; `wp-login` 302; trang vi 200.
+  - `?djtprobe=` desktop và iPhone (6 URL): chỉ có `tt-core/core.js?ver=1cc3bb7b7f`, không còn `thongthai-*.js` trong HTML; hai bản khác đúng 2 dòng `wpa_field_info`.
+  - Trình duyệt (phiên admin của chủ site): 1366 px `TT.has('ct-multi-sticky-sidebar') = true`, tải `lss-2.js`; cuộn 1.500 px thì sidebar `top = 20` (`marginTop`), 3.000–3.500 px dừng ở đáy `#content` (3.613 / 3.615). Trang chủ `/en/` không tải `lss` (`lss_settings` blog 2: `disableOn.home = true`). 375 px: `TT.mobile = true`, không tải `lss`, không tràn ngang.
+  - Console chỉ có lỗi AdSense `adsbygoogle.push() error: No slot size for availableWidth=0`; tràn ngang ở 1366 px là iframe quảng cáo `aswift_7` (1.200 px). Không so được với JS cũ (đã thay), nên chưa khẳng định lỗi này có từ trước.
+  - Error log PHP không có dòng mới. nginx `error.log` chỉ có 404 file của plugin `lightbox-photoswipe` (đã không còn) do bot gọi, có từ trước 18:00.
+- **Bước 3, một bản cache en:**
+  - `dott-single-cache.php` (backup `.bak-2026-11-28`): `array( 1 )` → `array( 1, 2 )`, `php -l` đạt. Option blog 2 qua filter: `cache_mobile=1`, `do_caching_mobile_files=0`.
+  - Backup `/root/backup-en-2026-11-28/wp-rocket-config/`. `rocket_generate_config_file()` cho blog 2. So dòng `diaocthongthai.com.en.php`: `do_caching_mobile_files` 1 → 0; thêm 20 tham số theo dõi (như vi); `cache_query_strings ['q']` → rỗng (như vi; option admin blog 2 đã rỗng, hôm nay 0 lượt `/en/…?q=`). File vi không đổi (md5 `5894d607…`).
+  - Test (sau 3 phút): xóa cache `/en/africa-map/` (5 file); iPhone lần đầu `MISS` chỉ tạo `index-https.html` + `_gzip`; sau đó iPhone và desktop đều nginx `HIT` cùng md5 với file trên đĩa, có `core.js`. Trang còn cache cũ (`/en/abkhazia-maps/`, còn `.mobile-active`): iPhone nhận bản desktop cũ qua PHP (`BYPASS`), như vi ở P4.
+- **Bước 4, Worker:** `deploy-production.sh` bỏ binding `LEGACY_PREFIXES` (script trên VPS phụ ở `test/p7/`, backup `.bak-2026-11-28-1830`); mã Worker không đổi. Test qua Cloudflare (giả lập châu lục bằng test key):
+  - en `/en/abkhazia-maps/`, `/en/africa-map/`, `/en/`: NA desktop và NA iPhone đều `S3-NA`, cùng md5; SA `S3-SA`; EU, châu Á `ORIGIN-region-*`.
+  - vi `S3-NA` như cũ; redirect `/tag/`, `/map-*`, `/en/page/2/`, ảnh uploads 301; `link_ds_*` 410; `/en/wp-json/` `ORIGIN-bypass`; chữ hoa 301; query `ORIGIN-query`; key sai bị bỏ qua.
+  - Từ lúc này tới khi bước 5 render lại, khách NA/SA dùng mobile nhận bản desktop cũ trên S3 (S3 en còn bản 21/11).
+- **Quay lại:** theme: giải nén `generatepress_en.tgz` đè lên và xóa `tt-core/`, `LEGACY-FILES.md`; mu-plugin: chép `.bak-2026-11-28`; config: chép `wp-rocket-config/diaocthongthai.com.en.php` từ backup (đợi 3 phút); Worker: `deploy-production.sh.bak-2026-11-28-1830 deploy` (có `LEGACY_PREFIXES`).
+- **Bước 5** (tạo lại cache en) chờ P6 vi xong (dự kiến 20:50–21:10).
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.

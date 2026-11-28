@@ -44,7 +44,6 @@ print(json.dumps({
   "bindings": [
     {"type": "kv_namespace", "name": "CACHE", "namespace_id": ns},
     {"type": "plain_text", "name": "REDIRECTS", "text": "1"},
-    {"type": "plain_text", "name": "LEGACY_PREFIXES", "text": json.dumps(["/en/"])},
     {"type": "plain_text", "name": "TARGETS", "text": json.dumps({"NA": bucket, "SA": bucket})},
     {"type": "secret_text", "name": "TEST_KEY", "text": key},
   ]}))
