@@ -5,6 +5,9 @@
 | `dott-cache-serve.service` | `dott-cache serve -sites …`: nhận sự kiện trên `127.0.0.1:8790`, pool, worker. `MemoryMax=250M` (đo: 23 MB) |
 | `dott-cache-tunnel.service` | `ssh -N -R 127.0.0.1:8790:127.0.0.1:8790 main`: cổng loopback VPS chính → serve. Cần key riêng có `permitlisten` (design-pool mục 9) |
 
+| `dott-cache-reconcile@<blog>.timer` | Hằng ngày 03:30: `reconcile -blog <blog>` (export + KV + S3 → thiếu / mồ côi vào pool). **Thay `sync@` và `sync-full@`** |
+| hằng tháng | `dott-cache-blog.sh <blog> submit-all` (toàn blog vào pool, mức 4) thay cho `update-all@` khi đã dùng pool |
+
 Log: `journalctl -u dott-cache-serve`, kết quả từng URL ở `logs/<site>/serve-YYYYMMDD.jsonl`. Xem pool: `dott-cache pool status`.
 
 # Lịch chạy dott-cache (systemd trên VPS phụ), **chưa bật**

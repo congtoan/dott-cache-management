@@ -66,6 +66,9 @@ type serveSite struct {
 	mu      sync.Mutex
 	blogs   map[int]string // blog_id → path, cập nhật mỗi lần gọi --ids
 	logMu   sync.Mutex
+	// recentDel: key KV vừa xóa (5 phút). KV đọc ra trễ tới khoảng 60 s, nên GET ngay sau khi xóa có thể
+	// vẫn trả "có": các key này luôn được PUT lại khi URL được làm mới.
+	recentDel map[string]time.Time
 }
 
 var (
@@ -116,7 +119,7 @@ func cmdServe(args []string) {
 		if name == "" {
 			continue
 		}
-		s := &serveSite{name: name, cfgPath: resolveConfig("", name), wake: make(chan struct{}, 1), blogs: map[int]string{}}
+		s := &serveSite{name: name, cfgPath: resolveConfig("", name), wake: make(chan struct{}, 1), blogs: map[int]string{}, recentDel: map[string]time.Time{}}
 		s.cfg, s.clients = setup(s.cfgPath)
 		f, ok := tryLockFile(filepath.Join(siteData(name, s.cfg), ".lock"))
 		if !ok {
@@ -505,8 +508,11 @@ func (s *serveSite) resolve(ctx context.Context, rows []pool.InboxRow) error {
 		}
 	}
 
-	// Phân trang và term rỗng: chỉ hỏi KV vài key.
-	if s.kvc != nil {
+	// Phân trang và term rỗng: hỏi S3 (đích đầu tiên) xem trang đang có hay không. Không hỏi KV: KV đọc
+	// ra trễ tới khoảng 60 s (đo 28/11: trang vừa PUT 12 s trước, GET vẫn trả "không có", nên trang thừa
+	// không bị gỡ). S3 đọc ngay sau khi ghi là thấy.
+	if len(s.clients) > 0 {
+		c0 := s.clients[0]
 		for base, r := range terms {
 			checks := map[string]string{} // path → "need" (phải có) | "drop" (phải không còn)
 			switch {
@@ -520,10 +526,10 @@ func (s *serveSite) resolve(ctx context.Context, rows []pool.InboxRow) error {
 				checks[base+"page/2/"] = "drop"
 			}
 			for p, want := range checks {
-				has, err := s.kvc.Exists(ctx, kv.Key(p))
-				if err != nil {
-					logf("%s: KV GET %s lỗi: %v", s.name, p, err)
-					continue
+				html := keyFor(c0.T.Prefix, p, "index-https.html")
+				has := false
+				for _, k := range keysInDirs(ctx, c0, []string{p}, true) {
+					has = has || k == html
 				}
 				u := exportURL{P: p, B: r.B, BP: r.BP, K: "term", T: r.T, PG: 2}
 				if want == "need" && !has {
@@ -673,6 +679,11 @@ func (s *serveSite) doRemove(ctx context.Context, items []pool.Item) {
 	}
 	logf("%s: gỡ %d URL: %s", s.name, len(paths), sample(paths))
 	remoteLogs = nil
+	s.mu.Lock()
+	for _, p := range paths {
+		s.recentDel[kv.Key(p)] = time.Now()
+	}
+	s.mu.Unlock()
 	removePaths(ctx, s.cfg, s.clients, paths, s.name+" gỡ")
 	for _, it := range items {
 		s.pool.Done(it)
@@ -830,7 +841,23 @@ func (s *serveSite) kvEnsureFew(ctx context.Context, items []pool.Item) (int, er
 	var firstErr error
 	sem := make(chan struct{}, 8)
 	var wg sync.WaitGroup
+	s.mu.Lock()
+	for k, t := range s.recentDel {
+		if time.Since(t) > 5*time.Minute {
+			delete(s.recentDel, k)
+		}
+	}
+	s.mu.Unlock()
 	for _, it := range items {
+		s.mu.Lock()
+		_, justDeleted := s.recentDel[kv.Key(it.Path)]
+		s.mu.Unlock()
+		if justDeleted {
+			mu.Lock()
+			missing = append(missing, kv.Key(it.Path))
+			mu.Unlock()
+			continue
+		}
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(p string) {
@@ -865,6 +892,11 @@ func (s *serveSite) kvEnsureFew(ctx context.Context, items []pool.Item) (int, er
 	if err != nil {
 		return 0, err
 	}
+	s.mu.Lock()
+	for _, k := range missing {
+		delete(s.recentDel, k)
+	}
+	s.mu.Unlock()
 	if len(failed) > 0 {
 		return len(missing) - len(failed), fmt.Errorf("PUT lỗi %d key", len(failed))
 	}

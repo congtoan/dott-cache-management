@@ -127,6 +127,8 @@ func main() {
 		cmdSubmit(os.Args[2:])
 	case "pool":
 		cmdPool(os.Args[2:])
+	case "reconcile":
+		cmdReconcile(os.Args[2:])
 	case "regen-all": // tên cũ của "update -all"
 		cmdRegenAll(os.Args[2:])
 	default:
@@ -149,6 +151,7 @@ func usage() {
   dott-cache submit -site <domain> -url URL | -urls a,b | -txt file [-remove] [-prio 3]
   dott-cache submit -site <domain> -all [-blog /]                    (toàn site vào pool, mức 4)
   dott-cache pool status
+  dott-cache reconcile -site <domain> -blog / [-dry-run] [-max-pct 2] [-force]   (đối soát hằng ngày → pool)
   SỬA NHANH FILE CACHE (không render lại; server + S3):
   dott-cache replace -site <domain> -content -search "cũ" -replace "mới" [-regex] <phạm vi> [-yes]
   dott-cache replace -site <domain> -version [-files generatepress_child/style.css,...] <phạm vi> [-yes]

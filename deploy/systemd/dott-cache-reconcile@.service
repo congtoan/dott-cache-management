@@ -1,0 +1,12 @@
+[Unit]
+Description=dott-cache reconcile %i (đối soát hằng ngày → pool)
+After=network-online.target dott-cache-serve.service
+Requires=dott-cache-serve.service
+
+[Service]
+Type=oneshot
+ExecStart=/root/tool/cache-system/bin/dott-cache-blog.sh %i reconcile
+MemoryMax=300M
+Nice=10
+CPUQuota=50%
+TimeoutStartSec=30min

@@ -671,5 +671,19 @@ Dữ liệu test để lại trên php81: excerpt của bài 150 có chữ "t0�
 - Chưa test qua trình duyệt (admin sửa bài qua PHP-FPM, Gutenberg 2 request). `wp_remote_post` dùng chung mã nên dự kiến như wp-cli; cần xem khi bật production.
 - Bình luận test đã vào thùng rác.
 
+### Pool: phân trang, Gutenberg, đối soát hằng ngày (28/11 16:45–16:56, php81)
+- **Phân trang thật** (category 15, 18 bài, 10 bài/trang):
+  - đăng 3 bài: `/page/3/` được thêm (`phân trang mới`), KV +1, S3 2 đích 200;
+  - xóa 3 bài lần đầu: `/page/3/` **không bị gỡ**. Nguyên nhân: kiểm tra "trang có hay không" bằng KV GET, mà key vừa PUT 12 s trước vẫn được KV trả 404 (KV đọc trễ tới khoảng 60 s).
+  - Sửa: kiểm tra bằng S3 (đích đầu tiên; đọc ngay sau khi ghi là thấy). Chạy lại: `/page/3/` bị gỡ (`phân trang thừa → removed`), KV 0, S3 2 đích hết.
+  - Cùng loại rủi ro ở bước PUT KV (key vừa xóa vẫn được GET trả "có", nên bỏ qua PUT): `serve` nhớ key vừa xóa trong 5 phút và luôn PUT lại.
+  - Giới hạn đã biết: khi có bài mới, chỉ trang 1 và trang mới được làm mới. Các trang 2..N cũ (bài bị đẩy xuống) chờ lần `submit -all` hằng tháng, như tool cũ.
+- **Gutenberg qua trình duyệt** (php81, phiên đăng nhập của chủ site trong browser pane): sửa excerpt bài 150, bấm Save. Trình soạn thảo gửi 2 request, nên `serve` nhận 2 sự kiện, gom thành 1 lô 3 URL; có trên S3 và KV khoảng 11 s sau khi bấm.
+- **`dott-cache reconcile -site X -blog /`** (mới, không dùng `state.db`): cần có = export; đang có = KV + `index-https.html` trên mọi đích S3; thiếu → pool mức 3; mồ côi → pool gỡ. Chặn: export lỗi/rỗng, mồ côi > `max-pct` (2%), cần có < 50% số key KV.
+  - php81 `/tttest/`: 1.226 URL, khớp 0/0; mất khoảng 5 s (export 3 s, list KV + 2 bucket 2 s).
+  - Tạo lệch: xóa S3 bài 150 (thiếu) + xóa bài test lúc tunnel tắt (mồ côi): dry-run thấy đúng 1/1; `-max-pct 0.01` từ chối; chạy thật: 2 việc vào pool, xong sau 4 s; chạy lại: 0/0.
+  - Production ước tính: list KV khoảng 47 s (đã đo), export 18 s.
+- Unit `dott-cache-reconcile@.timer` (03:30 hằng ngày) thay `sync@` và `sync-full@`; `dott-cache-blog.sh` có thêm `reconcile`, `submit-all`. **Chưa cài.**
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.
