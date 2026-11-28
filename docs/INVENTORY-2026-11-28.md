@@ -121,8 +121,8 @@ Xong (chi tiết trong rollout-log):
 - P1 đo trên production.
 
 Còn lại trước P6:
-- thiếu preconnect `fonts.gstatic.com` trong bản prefork (nhỏ);
 - `export-urls.php` và `replace-cache.php` chưa cài vào site production (thuộc P4).
+- (Đã đóng: bản prefork "thiếu preconnect `fonts.gstatic.com`" không phải lỗi. WP Rocket tự xóa thẻ này khi trang không dùng Google Fonts; bản prefork giống hệt bản do khách thật tạo. Xem rollout-log.)
 
 Cách chạy 2 lần (vi trước, en sau), theo kế hoạch của chủ site:
 - **Lần 1 (vi):**

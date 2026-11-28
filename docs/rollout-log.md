@@ -514,7 +514,7 @@ Mục đích: mô phỏng diaocthongthai.com để test tt-core, cache một b�
   - Ước tính site vi (24.273 URL): khoảng 1,5–2 giờ chưa tính thời gian nghỉ do điều tiết. Site en (36 nghìn URL, trang nhẹ hơn, p50 131 ms): khoảng 1,5 giờ.
 - **Phát hiện:**
   - Plugin kk Star Ratings **ghi DB mỗi lượt render** (`UPDATE _kksr_avg`: 785 lần cho 39 URL). Ở chế độ READ ONLY các lệnh ghi này bị chặn (đúng ý), nhưng WordPress ghi log lỗi kèm backtrace cho từng lệnh. Đã tắt log lỗi (`suppress_errors`) trong tiến trình con. Lỗi DB không lọt vào HTML.
-  - So với bản render qua HTTP: bản prefork có LCP beacon và footer `cached@`; bản HTTP có `?dottprobe` nên WP Rocket không chèn 2 phần này, nên đây không phải lỗi. **Khác biệt thật duy nhất: bản prefork thiếu `<link href='https://fonts.gstatic.com' crossorigin rel='preconnect' />`** (cũng gặp trên php81). Ảnh hưởng nhỏ, **chưa sửa**, cần tìm nguyên nhân.
+  - So với bản render qua HTTP: bản prefork có LCP beacon và footer `cached@`; bản HTTP có `?dottprobe` nên WP Rocket không chèn 2 phần này, nên đây không phải lỗi. Bản prefork thiếu `<link href='https://fonts.gstatic.com' crossorigin rel='preconnect' />`. **Đính chính cùng ngày: đây không phải lỗi**, xem mục "Preconnect fonts.gstatic: không phải lỗi" bên dưới.
 
 ### P0: chuẩn bị, chưa đụng site production (28/11)
 - **Worker v2:**
@@ -546,6 +546,15 @@ Mục đích: mô phỏng diaocthongthai.com để test tt-core, cache một b�
   Mồ côi nhiều nhất 111 path (0,46%), dưới ngưỡng 2%.
 - **mu-plugin `dott-single-cache` 1.1.0:** hằng số `DOTT_SINGLE_CACHE_BLOGS` (`null` = mọi blog; `array(1)` = chỉ site vi). Đã cài lên php81 (giá trị `null`): `/tttest/` vẫn có `cache_mobile=1`, `do_caching_mobile_files=0`. Sau khi đổi danh sách phải tạo lại file `wp-rocket-config` của blog đó.
 - **Lịch chạy (chưa bật):** `deploy/systemd/` gồm `sync@` (8 giờ/lần), `sync-full@` (hằng ngày), `update-all@` (hằng tháng), instance `vi`/`en`. `dott-cache-run.sh` ghi log, dọn log quá 30 ngày, và cho các lịch chạy nối đuôi nhau (`.cronlock`). Script đã chép vào `bin/` và chạy thử dry-run, nhưng **chưa cài unit**.
+
+### Preconnect fonts.gstatic: không phải lỗi (28/11, đính chính P1)
+- Trong WP Rocket 3.16, `GoogleFonts\Subscriber` làm 2 việc:
+  - thêm preconnect `fonts.gstatic.com` qua `wp_resource_hints`;
+  - trong `rocket_buffer` (`process()`), **xóa thẻ đó nếu trang không dùng Google Fonts**.
+- Bản so sánh có `?dottprobe` nên WP Rocket không chạy bước tối ưu, và thẻ không bị xóa. Bản prefork và bản do khách thật tạo đều đã qua `rocket_buffer`, nên không có thẻ.
+- **Kiểm chứng trên php81** (3 URL: bài, category, en): xóa cache, cho khách thật GET để WP Rocket ghi file, rồi prefork cùng URL. Sau khi bỏ nonce, honeypot và `cached@`: **0 dòng khác nhau**. Cả 2 bản đều không có preconnect; chỉ bản `?dottprobe` có.
+- **Production** (chỉ đọc): 0/200 file cache cũ do khách tạo có thẻ này; trang chủ vi và en cũng không có.
+- **Bài học:** muốn so với bản HTTP thì phải so với file cache do request thường tạo, không so với bản có query string. Áp dụng cho các lần so sánh sau (kể cả `compare-20.sh`).
 
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.
