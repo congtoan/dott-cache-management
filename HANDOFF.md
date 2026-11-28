@@ -96,6 +96,13 @@ Header S3 phải giữ khi upload: `ContentType: text/html`, `CacheControl: publ
 - **`renew -mode auto|http|prefork` (28/11):** tối đa 4 URL thì dùng http (`--delete-only` rồi GET), nhiều hơn thì dùng prefork; prefork lỗi thì thử lại bằng HTTP.
 - **Cảnh báo `open_file_cache`:** nginx (`open_file_cache_valid 120s`) có thể trả bản cũ tới 2 phút sau khi file cache bị xóa hoặc thay. Tool đã chặn bằng `MinCachedAt` (không upload bản cũ). **Đã sửa gốc 28/11** (chủ site đồng ý): `open_file_cache off;` ở đầu `/etc/nginx/extra/rocket-page-cache.conf` (backup `.bak-2026-11-28`), đã reload, đã kiểm tra.
 
+- **Danh sách URL → SQLite (28/11):**
+  - `export-urls.php` trong site, gọi qua `dott-prefork <domain> --export-urls`. Production: 65.657 URL trong 18 s.
+  - `dott-cache urls sync` (lấy toàn bộ, hoặc `-since auto`) ghi vào `data/<domain>/state.db`.
+  - So với `cache_urls.db` cũ: 60.678/60.687 URL trùng; 9 URL chỉ có ở DB cũ là term rỗng hoặc bài đã mất.
+  - Lịch chốt: lấy phần thay đổi 8 giờ/lần, lấy toàn bộ 1 lần/ngày (chưa triển khai).
+- **KV test (28/11):** `dott-cache kv create|list|sync`, namespace `php81-cache-test`. `kv sync` chưa kiểm tra trạng thái upload S3.
+
 ## 5. Việc tiếp theo (chủ site chọn)
 1. **Service `dott-cache` có hàng đợi** (SQLite, nhận sự kiện từ mu-plugin trên php81, render bằng HTTP hoặc prefork, upload nhiều đích), test trên php81 với bucket test.
 2. Đo prefork trên production (chỉ đọc, không ghi cache), khi chủ site cho phép.

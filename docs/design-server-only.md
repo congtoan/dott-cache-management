@@ -321,17 +321,33 @@ Bảo mật:
 - Chỉ chấp nhận IP `139.180.158.221`; khi gọi qua Cloudflare thì trả 404.
 - Không có endpoint nào trả nội dung nhạy cảm.
 
-### 7.3. Quét định kỳ (lưới an toàn)
-- **Mỗi 15 phút:** `GET /urls?modified_after=watermark` để bắt thay đổi không đi qua hook (import SQL, sửa thẳng DB).
-- **Hằng đêm 02:00:** lấy danh sách đầy đủ theo trang (khoảng 60 nghìn URL, 500 URL mỗi request, có nghỉ giữa các trang). Đối chiếu với SQLite: URL mới thì `refresh`, URL không còn thì `remove` (có chặn ngưỡng, mục 9).
-- Thay thế: A1, u1, u2, `wp_cli_extract_all_urls.py`, KV_export/import.
+### 7.3. Quét định kỳ (lưới an toàn), **chỉnh 28/11: dùng script PHP qua CLI, không dùng REST**
+- Nguồn danh sách URL: `wp-content/mu-plugins/dott-cache/export-urls.php`, gọi bằng `ssh main dott-prefork <domain> --export-urls [--since=UNIX]`.
+  - Script nạp WordPress một lần cho mỗi blog, mỗi blog chạy trong một tiến trình PHP riêng để permalink và custom post type đúng.
+  - Lấy ID bằng một query SQL, rồi `get_permalink` theo lô 500.
+  - Đo trên production (chỉ đọc, 28/11): **65.657 URL trong 18 s**, load tối đa 1,11. Phần thay đổi trong 8 giờ mất 4 s.
+  - Cách này nhanh hơn nhiều so với tool cũ (khoảng 60 lệnh `wp` qua SSH, mỗi lệnh phải nạp lại WordPress) và REST phân trang (khoảng 130 request).
+- Lọc theo `urls` trong `config/sites/<domain>.json`: `skip_blogs`, `taxonomies` theo blog, `exclude` (regex), `exclude_pagination`, `max_remove_pct`. Đổi quy tắc không phải sửa site.
+- **Lịch (chủ site chốt 28/11, chưa triển khai):**
+  - **8 giờ/lần:** `dott-cache urls sync -since auto`. Chỉ lấy bài có `post_modified_gmt` mới hơn mốc lần trước trừ 10 phút. Kèm term của bài, để làm mới trang 1 của archive liên quan.
+  - **1 lần/ngày:** `dott-cache urls sync` lấy toàn bộ: thêm URL mới, đánh dấu `removed` URL đã mất. Nếu mất quá `max_remove_pct` (2%) thì dừng, không ghi.
+- Thay thế: A1, u1, u2, `wp_cli_extract_all_urls.py`, KV_export/import. REST `/urls` ở mục 7.2 không cần nữa.
 
 ## 8. Trạng thái trên VPS phụ (SQLite)
 
 - Lý do v1 chọn MariaDB là có nhiều tiến trình cùng ghi, và PHP cần ghi vào hàng đợi. Ở v2 cả hai lý do đều không còn: **chỉ một tiến trình Go ghi** (các goroutine gửi kết quả qua channel cho một writer duy nhất), còn PHP ghi vào bảng sự kiện trên VPS chính.
 - Dùng `modernc.org/sqlite` (Go thuần, không cần cgo), chế độ WAL. Lệnh đọc (`dott-cache status`, báo cáo) chạy song song không bị chặn.
-- Schema giữ như v1: bảng `urls` (path, blog_id, page_type, object, page_number, status, disk_at, s3_at, kv_at, fail_count, last_error), `queue`, `pins`, `state`, `runs`. Bỏ `claimed_by/claimed_at` vì không còn nhiều worker tranh việc.
-- **Chuyển dữ liệu một lần:** lấy `cache_urls.db` trên VPS chính (bản `.backup`), import vào SQLite mới, suy ra `blog_id/page_type` (sửa F3), đối chiếu số lượng với KV (60.687).
+- **Đã có từ 28/11** (`internal/store`): `data/<domain>/state.db` với các bảng:
+  - `urls`: path, blog_id, kind (single | term | pt_archive | home), obj_type, obj_id, page, modified, status, first_seen, last_seen, removed_at;
+  - `runs`;
+  - `meta`: mốc của lần `-since` trước.
+  - Sẽ thêm khi cần: `cache` (cached@, fail, hạn renew), `url_targets` (trạng thái từng đích S3), `kv`, `queue`.
+- Build có `modernc.org/sqlite` trên VPS phụ: lần đầu 89 s, RAM tối đa 475 MB (chạy trong `systemd-run --scope -p MemoryMax=600M`); các lần sau khoảng 5 s. File chạy 16 MB.
+- **Không import `cache_urls.db` cũ** (chủ site chốt): DB được tạo mới từ export. Đã so với DB cũ (28/11):
+  - DB mới có 61.175 URL; **60.678/60.687 URL của DB cũ có trong DB mới**.
+  - 9 URL chỉ có ở DB cũ: 8 term rỗng (count = 0) và 1 bài không còn trong database.
+  - 497 URL chỉ có ở DB mới: bài mới, cùng các trang phân trang và tag có thêm từ khi DB cũ được cập nhật. Thử ngẫu nhiên 16 URL: đều trả 200.
+  - Số trang phân trang khớp với thực tế: `/cac-thanh-pho-cua-my/page/192/` trả 200, `/page/193/` trả 404.
 - **Backup:** mỗi đêm `VACUUM INTO` một bản rồi upload lên S3 (prefix `_backup/dott-cache/`), giữ 14 bản. Nếu mất VPS phụ thì dựng lại từ bản này, hoặc chạy lại "quét đầy đủ" + reconcile.
 
 ## 9. Đối soát (reconcile) S3 ↔ KV ↔ URL thật

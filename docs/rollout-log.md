@@ -315,5 +315,31 @@ Mục đích: mô phỏng diaocthongthai.com để test tt-core, cache một b�
   - Tái hiện lại lỗi cũ: GET 2 lần (HIT) → `--delete-only` → GET trả **MISS** (render mới) → GET trả **HIT với `cached@` mới**. Không còn bản cũ.
   - Kiểm tra `MinCachedAt` trong tool vẫn giữ, để phòng trường hợp khác.
 
+### Danh sách URL → SQLite, Cloudflare KV test (28/11)
+- **`export-urls.php`** (`wp/mu-plugins/dott-cache/`, đã cài trên php81) được gọi qua `dott-prefork <domain> --export-urls [--since=N]` (có khóa chung). Bộ chuyển lệnh đã cập nhật, có backup `/usr/local/sbin/dott-prefork.bak-2026-11-28`.
+- **php81:** 4 blog, 1.489 URL trong 2,6–3 s.
+- **Production** (chỉ đọc, bằng bản tạm `/tmp/dott-export-urls.php` chạy bằng user site, **không cài vào site**, đã xóa sau khi chạy):
+  - 65.657 URL trong 18 s (blog 1: 24.346, blog 2: 41.309, `/es/`: 2), load tối đa 1,11;
+  - `-since` 8 giờ: 4 s, 0 bài.
+- **SQLite:** `modernc.org/sqlite` v1.63.0 (go.mod). Lần build đầu 89 s, RAM tối đa 475 MB, trong scope `MemoryMax=600M`.
+- **`dott-cache urls sync`:**
+  - php81: lần đầu thêm 1.489 URL; chạy lại thì 0 thay đổi; `-since auto` cũng 0 thay đổi.
+  - diaocthongthai.com: đọc từ file export, có config lọc lấy từ tool cũ (`deploy/config/sites/diaocthongthai.com.json`). Giữ 61.175 URL, bỏ 4.480 URL, trong đó 4.401 thuộc taxonomy `current_location_kw` (tool cũ cũng không lấy taxonomy này).
+- **So với `cache_urls.db` cũ (60.687 URL):**
+  - 60.678 URL trùng nhau.
+  - 9 URL chỉ có ở DB cũ: 8 term có count = 0 và 1 bài không còn trong database.
+  - 497 URL chỉ có ở DB mới: 263 trang phân trang của tag, 36 tag, 15 trang phân trang của category, 173 bài, cùng một số trang EDD.
+  - Thử 16 URL mới ngẫu nhiên: đều trả 200. Phân trang chính xác: trang 192 trả 200, trang 193 trả 404.
+  - Đã thêm `^/(en/)?checkout/` vào exclude (5 trang EDD checkout).
+- **Cloudflare KV:**
+  - Token KV được chép từ `secrets.json` trên PC vào `config/secrets/cf.env` (600), không hiện ra hội thoại.
+  - Namespace test `php81-cache-test` có id `a8dfab77d27f4db7ac1c015eaca013f7`. **Không đụng KV của diaocthongthai.**
+  - Kết quả `dott-cache kv sync`:
+    - PUT 1.489 key: 0,6 s, list kiểm tra đủ;
+    - chạy lại: không có gì đổi;
+    - gỡ 5 URL trong DB: xóa 5 key, kiểm tra còn thừa 0;
+    - `urls sync` đưa 5 URL quay lại: PUT lại 5 key.
+  - **Còn thiếu:** `kv sync` chưa kiểm tra URL đã có trên S3 hay chưa (chưa có bảng `url_targets`), nên hiện chỉ dùng với namespace test.
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.

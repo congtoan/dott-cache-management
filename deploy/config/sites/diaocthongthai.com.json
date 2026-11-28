@@ -1,0 +1,40 @@
+{
+  "origin": {
+    "host": "diaocthongthai.com",
+    "ip": "45.77.32.177",
+    "spki_pin": "oqhm5KRTcPw6B6FNpgTMxww20FoxF3uoY1oBeD+TSAM=",
+    "workers": 2
+  },
+  "targets": [],
+  "s3_env": "/root/tool/cache-system/config/secrets/s3.env",
+  "renew": {},
+  "urls": {
+    "skip_blogs": ["/es/"],
+    "taxonomies": {
+      "/": ["category", "post_tag", "cdt", "khu-vuc", "san-pham"],
+      "/en/": ["category", "post_tag"]
+    },
+    "exclude": [
+      "^/danh-sach-xa-phuong-viet-nam/",
+      "^/danh-sach-phuong-xa-",
+      "^/test-page/",
+      "^/danh-sach-quan-huyen-viet-nam/",
+      "^/test2/",
+      "^/huy-dang-ky-email/",
+      "^/danh-sach-xa-phuong-viet-nam-2025-new/",
+      "^/en/test-post/",
+      "^/en/list-of-all-countries-in-the-world/",
+      "^/en/list-of-all-us-states/",
+      "^/en/list-of-all-us-counties/",
+      "^/en/list-of-all-us-cities-and-places/",
+      "^/(en/)?checkout/",
+      "/feed/",
+      "sitemap",
+      "^/wp-admin/",
+      "^/wp-login"
+    ],
+    "exclude_pagination": ["/ban-do-34-tinh-thanh-viet-nam-2025/"],
+    "max_remove_pct": 2
+  },
+  "_note": "Quy tắc lọc lấy từ tool cũ legacy/pc/wp_cli_extract_all_urls.py (run_vi, run_en). Chưa dùng để renew/upload: targets và renew để trống cho tới khi chuyển production."
+}

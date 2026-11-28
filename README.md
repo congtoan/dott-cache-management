@@ -46,6 +46,9 @@ HANDOFF.md, CLAUDE.md   ← đọc đầu tiên / hướng dẫn cho Claude Code
 cmd/dott-cache/         ← Go: CLI/service (prototype: `upload`, `delete`, `renew`)
 internal/origin/        ← Go: gọi origin với SPKI pin
 internal/s3/            ← Go: S3 SigV4, chỉ dùng stdlib, pool nhiều đích
+internal/store/         ← Go: SQLite (modernc.org/sqlite) data/<domain>/state.db
+internal/kv/            ← Go: Cloudflare KV REST (bulk put/delete, list kiểm tra lại)
+deploy/config/sites/    ← mẫu config/sites/<domain>.json (không có bí mật)
 go.mod
 wp/mu-plugins/          ← mu-plugin WordPress: dott-single-cache.php, dott-cache/prefork-render.php (prefork, nằm trong website); sắp có dott-cache.php (sự kiện + REST)
 deploy/nginx/           ← rocket-page-cache.conf (rocket-nginx)

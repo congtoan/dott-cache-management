@@ -39,6 +39,32 @@ type Config struct {
 	S3Env   string            `json:"s3_env"`
 	Headers map[string]string `json:"headers"`
 	Renew   RenewConfig       `json:"renew"`
+	URLs    URLConfig         `json:"urls"`
+	KV      KVConfig          `json:"kv"`
+}
+
+// URLConfig: quy tắc chọn URL cần cache (lệnh "urls sync"). Áp ở VPS phụ, nên đổi quy tắc không phải sửa site.
+type URLConfig struct {
+	SkipBlogs         []string            `json:"skip_blogs"`         // path blog bỏ qua, vd ["/es/"]
+	Taxonomies        map[string][]string `json:"taxonomies"`         // path blog → taxonomy được lấy; blog không có trong map: lấy mọi taxonomy
+	Exclude           []string            `json:"exclude"`            // regex trên path, khớp thì bỏ
+	ExcludePagination []string            `json:"exclude_pagination"` // path archive không lấy page/N/
+	SkipHome          bool                `json:"skip_home"`          // không lấy trang chủ của blog
+	SkipPTArchive     bool                `json:"skip_pt_archive"`    // không lấy archive của post type
+	MaxRemovePct      float64             `json:"max_remove_pct"`     // chặn khi một lần full xóa quá N% URL (mặc định 2)
+}
+
+// loadConfig chỉ đọc file config (không cần key S3).
+func loadConfig(cfgPath string) Config {
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		die("đọc config: %v", err)
+	}
+	var cfg Config
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		die("config JSON: %v", err)
+	}
+	return cfg
 }
 
 // RenewConfig: cách gọi prefork trên VPS chính.
@@ -58,6 +84,10 @@ func main() {
 		cmdUpload(os.Args[2:], true)
 	case "renew":
 		cmdRenew(os.Args[2:])
+	case "urls":
+		cmdURLs(os.Args[2:])
+	case "kv":
+		cmdKV(os.Args[2:])
 	default:
 		usage()
 	}
@@ -68,6 +98,9 @@ func usage() {
   dott-cache upload -site <domain> -paths paths.txt [-limit N] [-mobile-copy] [-log out.jsonl]
   dott-cache delete -site <domain> -paths paths.txt
   dott-cache renew  -site <domain> (-url URL | -paths paths.txt) [-mode auto|http|prefork] [-http-max 4] [-limit N] [-keep-s3] [-no-delete] [-log out.jsonl]
+  dott-cache urls sync -site <domain> [-since auto|8h|UNIX] [-from export.txt] [-dry-run] [-force-remove]
+  dott-cache urls stats -site <domain>
+  dott-cache kv create -site <domain> -title <tên> | kv list -site <domain> [-prefix P] | kv sync -site <domain> [-dry-run] [-force-remove]
   -site <domain> dùng config/sites/<domain>.json; -config <file> thay cho -site. Không có -log thì ghi vào logs/<domain>/.`)
 	os.Exit(2)
 }
@@ -231,14 +264,7 @@ func defaultLog(logPath, site, cmd string) string {
 
 // setup đọc config, key S3 và tạo client cho mọi đích.
 func setup(cfgPath string) (Config, []*s3.Client) {
-	raw, err := os.ReadFile(cfgPath)
-	if err != nil {
-		die("đọc config: %v", err)
-	}
-	var cfg Config
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		die("config JSON: %v", err)
-	}
+	cfg := loadConfig(cfgPath)
 	env := loadEnv(cfg.S3Env)
 	ak, sk := env["S3_ACCESS_KEY"], env["S3_SECRET_KEY"]
 	if ak == "" || sk == "" {
