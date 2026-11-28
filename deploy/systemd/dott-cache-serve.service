@@ -1,0 +1,21 @@
+[Unit]
+Description=dott-cache serve (sự kiện WordPress + pool + worker; docs/design-pool.md)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Danh sách site phục vụ: sửa -sites khi bật thêm site (vd thêm diaocthongthai.com ở bước production).
+ExecStart=/root/tool/cache-system/bin/dott-cache serve -sites php81.congtoan.net -listen 127.0.0.1:8790
+Restart=always
+RestartSec=5
+# SIGTERM: dừng lô đang chạy rồi thoát. Việc dở dang vẫn nằm trong pool.db và được làm lại khi khởi động.
+TimeoutStopSec=60
+KillMode=mixed
+MemoryHigh=150M
+MemoryMax=250M
+Nice=10
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target

@@ -80,6 +80,7 @@ Chạy `dott-cache` không tham số để xem đủ cờ.
 - Bỏ lịch `sync` 8 giờ/lần; bản "đọc file sự kiện mỗi phút" đã bỏ.
 - Site là nguồn sự thật, KV/S3/đĩa là trạng thái thật. `state.db` (danh sách URL) sẽ bỏ ở đợt sau.
 - Thứ tự: test trên php81 → P6–P7 production bằng CLI hiện tại → bật `serve` + tunnel + plugin thay cho P8.
+- **Trạng thái 28/11 16:25:** đã cài và test trên php81 (rollout-log "Pool: triển khai và test trên php81"). `dott-cache-serve` đang chạy trên VPS phụ cho php81 (chưa enable; nó giữ khóa site php81, nên lệnh ghi CLI cho php81 bị từ chối: dùng `submit`, hoặc `systemctl stop dott-cache-serve`). **Tunnel bị chặn** vì key root có `no-port-forwarding`: cần chủ site duyệt key riêng cho tunnel (`permitlisten="127.0.0.1:8790"`, `command="/bin/false"`).
 
 **Còn mở, không chặn rollout:**
 - Lưu trạng thái render/upload từng URL vào DB, rồi thêm `dott-cache status`.

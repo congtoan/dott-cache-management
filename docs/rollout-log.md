@@ -609,5 +609,44 @@ Chủ site chọn cập nhật gần như ngay (INVENTORY mục 3.A.2), thay vì
 - Đo (chỉ đọc): list toàn bộ KV production **46,9 s**; dùng được cho đối soát hằng ngày, không dùng cho từng sự kiện.
 - Bản "events đọc file mỗi phút" (commit 6a8f2d1) bị thay. Thiết kế: [design-pool.md](design-pool.md).
 
+### Pool: triển khai và test trên php81 (28/11 16:00–16:25, chủ site giao)
+**Đã cài:**
+- VPS chính:
+  - `dott-prefork` thêm `--ids` (không chờ khóa); bỏ `--events`. Backup: `dott-prefork.bak-2026-11-28-1604`.
+  - php81: `export-urls.php` có `--ids` (backup `.bak-2026-11-28-1604`); mu-plugin `dott-cache-events.php` 3.0.0 (mới); `/home/php81conZSI/php81.congtoan.net/dott-cache-hook.json` (600, token).
+  - **Production diaocthongthai.com không đổi gì** ngoài `dott-prefork` dùng chung (chỉ thêm `--ids`); sau khi cài `/`, `/en/` đều 200, `--loadavg` chạy.
+- VPS phụ: binary mới (backup `bin/dott-cache.bak-2026-11-28-1606`); `dott-cache-serve.service` đang chạy (**chưa enable**); `dott-cache-tunnel.service` đã cài nhưng **dừng** (xem chặn ở dưới); token `config/secrets/hook-php81.congtoan.net.token`.
+
+**Chặn: tunnel chưa chạy được.** Key root của VPS phụ trong `authorized_keys` của VPS chính có `no-port-forwarding` (cùng `from="139.180.158.221"`), nên `ssh -R` bị từ chối. Không gỡ tùy chọn này. Đề xuất: thêm một key riêng cho tunnel với `restrict,port-forwarding,permitlisten="127.0.0.1:8790",permitopen="none",command="/bin/false",from="139.180.158.221"`. Cần chủ site duyệt (sửa cấu hình bảo mật production).
+
+**Cách test khi chưa có tunnel:** mở listener tạm (`socat`, 30 s) trên `127.0.0.1:8790` của VPS chính để **bắt payload thật** của mu-plugin khi chạy `wp` trên php81, rồi gửi lại payload đó vào `serve` trên VPS phụ. Đã test đủ mọi phần trừ đoạn tunnel.
+
+| Test | Kết quả |
+|---|---|
+| T0 tunnel tắt (không ai nghe cổng) | `wp post update` 1,34 s như bình thường, không lỗi |
+| T1 sửa bài | payload có `old_url`, `old_terms`; làm mới 3 URL (bài, category, trang chủ); S3 cả 2 đích có `Last-Modified` mới. Lần này chờ load 47 s (load 1,53), xem sửa 2 |
+| T2 bình luận | lần đầu **không có sự kiện** (`wp comment create` không kích `comment_post`), sửa 1; lần sau: làm mới bài, xong sau khoảng 7 s |
+| T3 đổi slug | gỡ URL cũ (KV xóa, S3 2 đích hết), thêm URL mới (KV +1, S3 200); khoảng 11 s. T3b trả slug: ngược lại, đúng |
+| T4 thùng rác | gỡ bài, làm mới category và trang chủ. T4b khôi phục: thêm lại, KV +1 |
+| T8 bảo mật | token sai / thiếu: 403; GET: 405; `/submit` qua TCP: 404 (chỉ có trên unix socket) |
+| T5 sự kiện chen giữa `submit -all` (1.226 URL `/tttest/`) | sự kiện sửa bài xong sau **20 s** trong lúc hàng loạt đang chạy; pool có 80 việc running = 2 lô (render và upload gối đầu) |
+| T6 restart giữa chừng | pool giữ nguyên 905 việc rồi chạy tiếp. 40 việc của lô đang chạy bị tính lỗi (`context canceled`), xem sửa 3; T6b sau khi sửa: 120/120 ok, 0 retry |
+| Hàng loạt | 1.226 URL trong 441 s, kể cả export 3,3 s và các lần nghỉ vì load (22–51 s mỗi lần). Khi load thấp: lô 40 URL render 3–6 s + upload 3 s; khoảng 8 URL/s. 1.228 ok, 0 bỏ. RAM serve tối đa 23 MB |
+| T7 race: gỡ đúng lúc đang render | log: `superseded` (không PUT KV) → `removed`; KV 0, S3 2 đích hết. T7b trả lại: đúng |
+| `--ids` | 1,2–2,3 s mỗi lô sự kiện (2 lần nạp WordPress khoảng 0,5 s) |
+
+**Lỗi tìm ra và đã sửa:**
+1. `get_post(0)` của WordPress trả bài toàn cục, nên `--ids` với ID 0 trả nhầm bài; ID ≤ 0 giờ là "không có".
+2. Bình luận thêm bằng `wp_insert_comment` (WP-CLI, import) không kích `comment_post`: thêm hook `wp_insert_comment`.
+3. Hủy do dừng service bị tính là lỗi (phải chờ 1 phút thử lại): giờ bỏ qua, việc trở về hàng đợi khi khởi động.
+
+**Thay đổi theo kết quả đo:**
+- Lô HTTP (≤ 4 URL, tức một lần sửa bài) **không chờ load**: tốn CPU như vài khách truy cập. Lô prefork vẫn điều tiết `max_load` 1,5.
+- `timeout` của POST trong plugin: 2 s → 1 s. Khi bên kia nhận mà không trả lời, lệnh `wp` chậm thêm đúng bằng `timeout` (đo với listener không trả lời: thêm khoảng 2 s). Tunnel tắt thì không chậm.
+
+**Chưa test:** đường thật WordPress → tunnel → serve (chờ key tunnel); phân trang thật (term có nhiều trang thay đổi số trang); sự kiện sửa/xóa term; nhiều site trong một serve; production.
+
+Dữ liệu test để lại trên php81: excerpt của bài 150 có chữ "t0…t5"; 2 bình luận test đã vào thùng rác.
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.

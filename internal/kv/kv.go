@@ -139,6 +139,41 @@ func (c *Client) ListKeys(ctx context.Context, prefix string) ([]string, error) 
 	}
 }
 
+// Exists: key có trong namespace không (GET /values/<key>: 200 có, 404 không). Tính là một lượt đọc,
+// rẻ hơn list toàn bộ (production 60 nghìn key mất khoảng 47 s) khi chỉ cần biết vài key.
+func (c *Client) Exists(ctx context.Context, key string) (bool, error) {
+	var last error
+	for attempt := 0; attempt < 4; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt*attempt) * time.Second)
+		}
+		req, err := http.NewRequestWithContext(ctx, "GET", api+c.ns()+"/values/"+url.PathEscape(key), nil)
+		if err != nil {
+			return false, err
+		}
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+		resp, err := c.http.Do(req)
+		if err != nil {
+			last = err
+			continue
+		}
+		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+		switch {
+		case resp.StatusCode == 200:
+			return true, nil
+		case resp.StatusCode == 404:
+			return false, nil
+		case resp.StatusCode == 429 || resp.StatusCode >= 500:
+			last = fmt.Errorf("HTTP %d", resp.StatusCode)
+			continue
+		default:
+			return false, fmt.Errorf("HTTP %d", resp.StatusCode)
+		}
+	}
+	return false, last
+}
+
 type bulkResult struct {
 	SuccessfulKeyCount int      `json:"successful_key_count"`
 	UnsuccessfulKeys   []string `json:"unsuccessful_keys"`

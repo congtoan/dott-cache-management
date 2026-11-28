@@ -1,0 +1,17 @@
+[Unit]
+Description=dott-cache tunnel: cổng 127.0.0.1:8790 trên VPS chính → 127.0.0.1:8790 trên VPS phụ (SSH reverse)
+After=network-online.target dott-cache-serve.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# GatewayPorts no trên VPS chính: cổng chỉ mở trên loopback của VPS chính.
+# ExitOnForwardFailure: cổng đang bị chiếm thì thoát và thử lại, không chạy "giả".
+ExecStart=/usr/bin/ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+  -R 127.0.0.1:8790:127.0.0.1:8790 main
+Restart=always
+RestartSec=10
+MemoryMax=50M
+
+[Install]
+WantedBy=multi-user.target

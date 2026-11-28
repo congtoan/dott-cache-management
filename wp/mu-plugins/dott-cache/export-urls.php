@@ -19,6 +19,7 @@
  *   - archive của post type có has_archive, kèm phân trang;
  *   - trang chủ của blog.
  * Lọc (taxonomy nào, exclude_patterns) làm ở VPS phụ theo config, để đổi quy tắc không phải sửa site.
+ * --ids=BLOG:pID,BLOG:t:TAX:ID: trạng thái hiện tại của các bài / term vừa đổi (xem chú thích ở dưới).
  * --since=UNIX: chỉ xuất bài đơn có post_modified_gmt >= since (chạy định kỳ), kèm id các term của
  * bài, để VPS phụ biết archive nào cần làm mới. Không xuất archive và trang chủ.
  *
@@ -33,7 +34,7 @@ if ( PHP_SAPI !== 'cli' ) {
 	exit( 1 );
 }
 
-$opt = getopt( '', array( 'root:', 'host:', 'since::', 'blog-path::', 'terms::' ) );
+$opt = getopt( '', array( 'root:', 'host:', 'since::', 'blog-path::', 'terms::', 'ids::' ) );
 if ( empty( $opt['root'] ) || empty( $opt['host'] ) ) {
 	fwrite( STDOUT, "# thiếu --root/--host\nDONE blogs=0 urls=0\n" );
 	exit( 2 );
@@ -48,6 +49,19 @@ $ex_terms = array();
 foreach ( array_filter( explode( ',', (string) ( $opt['terms'] ?? '' ) ) ) as $t ) {
 	if ( preg_match( '/^(\d+):([a-z0-9_-]+):(\d+)$/', $t, $m ) ) {
 		$ex_terms[] = array( (int) $m[1], $m[2], (int) $m[3] );
+	}
+}
+// --ids=BLOG:pID,BLOG:t:TAXONOMY:ID,...: trạng thái HIỆN TẠI của các bài / term vừa đổi (dott-cache serve).
+// Mỗi mục trả các dòng U có thêm "q" (mục được hỏi):
+//   bài còn publish: bài (k=single), trang 1 của mọi term public của bài (k=term, "pages"=số trang), trang chủ;
+//   term còn (count > 0): trang 1 (k=term, "pages");
+//   không còn: {"k":"gone"}.
+$ex_ids = array(); // blog_id => list of [kind, tax, id, q]
+foreach ( array_filter( explode( ',', (string) ( $opt['ids'] ?? '' ) ) ) as $t ) {
+	if ( preg_match( '/^(\d+):p(\d+)$/', $t, $m ) ) {
+		$ex_ids[ (int) $m[1] ][] = array( 'p', '', (int) $m[2], 'p' . $m[2] );
+	} elseif ( preg_match( '/^(\d+):t:([a-z0-9_-]+):(\d+)$/', $t, $m ) ) {
+		$ex_ids[ (int) $m[1] ][] = array( 't', $m[2], (int) $m[3], 't:' . $m[2] . ':' . $m[3] );
 	}
 }
 
@@ -87,11 +101,36 @@ if ( null === $ex_blog ) {
 	}
 	ex_line( sprintf( '# %d blog: %s (boot %d ms)', count( $paths ), implode( ' ', $paths ), $boot_ms ) );
 	$total = 0;
+	if ( $ex_ids ) {
+		// Map blog_id → path của mọi blog trên host, để VPS phụ biết path nào thuộc blog nào.
+		$map = array( '1' => '/' );
+		if ( is_multisite() ) {
+			$map = array();
+			foreach ( get_sites( array( 'number' => 1000, 'deleted' => 0, 'archived' => 0, 'spam' => 0 ) ) as $s ) {
+				if ( strtolower( $s->domain ) === $ex_host ) {
+					$map[ (string) $s->blog_id ] = $s->path;
+				}
+			}
+		}
+		ex_line( 'BLOGS ' . json_encode( $map, JSON_UNESCAPED_SLASHES ) );
+	}
+	if ( $ex_ids && is_multisite() ) {
+		// Chế độ --ids: chỉ nạp các blog có trong danh sách.
+		$want = array();
+		foreach ( array_keys( $ex_ids ) as $bid ) {
+			$d = get_blog_details( $bid );
+			if ( $d && strtolower( $d->domain ) === $ex_host ) {
+				$want[] = $d->path;
+			}
+		}
+		$paths = array_values( array_intersect( $paths, $want ) );
+	}
 	foreach ( $paths as $bp ) {
 		$cmd = escapeshellarg( PHP_BINARY ) . ' ' . escapeshellarg( __FILE__ )
 			. ' --root=' . escapeshellarg( $ex_root ) . ' --host=' . escapeshellarg( $ex_host )
 			. ' --blog-path=' . escapeshellarg( $bp ) . ( $ex_since ? ' --since=' . $ex_since : '' )
-			. ( $ex_terms ? ' --terms=' . escapeshellarg( (string) $opt['terms'] ) : '' ) . ' 2>/dev/null';
+			. ( $ex_terms ? ' --terms=' . escapeshellarg( (string) $opt['terms'] ) : '' )
+			. ( $ex_ids ? ' --ids=' . escapeshellarg( (string) $opt['ids'] ) : '' ) . ' 2>/dev/null';
 		$p = popen( $cmd, 'r' );
 		while ( false !== ( $l = fgets( $p ) ) ) {
 			$l = rtrim( $l, "\n" );
@@ -134,6 +173,60 @@ function ex_out( array $r ) {
 	$n++;
 	$r['bp'] = $ex_bp; // path của blog (vd "/en/"), để VPS phụ áp quy tắc lọc theo blog
 	ex_line( 'U ' . json_encode( $r, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ) );
+}
+
+// ---- Chế độ --ids ----
+if ( $ex_ids ) {
+	$t_item = function ( $t, $q ) use ( $blog_id, $ppp ) {
+		$base = ex_path( get_term_link( $t ) );
+		if ( null === $base ) {
+			return;
+		}
+		ex_out( array( 'p' => $base, 'b' => $blog_id, 'k' => 'term', 't' => $t->taxonomy, 'id' => (int) $t->term_id, 'pg' => 1,
+			'pages' => max( 1, (int) ceil( $t->count / $ppp ) ), 'q' => $q ) );
+	};
+	$home = false;
+	foreach ( $ex_ids[ $blog_id ] ?? array() as list( $kind, $tax, $id, $q ) ) {
+		if ( 'p' === $kind ) {
+			$home = true; // bài đăng, sửa hay gỡ đều làm đổi trang chủ
+			$post = $id > 0 ? get_post( $id ) : null; // get_post(0) trả về bài toàn cục, không phải "không có"
+			$pto  = $post ? get_post_type_object( $post->post_type ) : null;
+			$path = ( $post && 'publish' === $post->post_status && $pto && $pto->public && 'attachment' !== $post->post_type )
+				? ex_path( get_permalink( $post ) ) : null;
+			if ( null === $path ) {
+				ex_out( array( 'p' => '', 'b' => $blog_id, 'k' => 'gone', 'id' => $id, 'q' => $q ) );
+				continue;
+			}
+			ex_out( array( 'p' => $path, 'b' => $blog_id, 'k' => 'single', 't' => $post->post_type, 'id' => (int) $id, 'q' => $q,
+				'm' => (int) strtotime( $post->post_modified_gmt . ' UTC' ) ) );
+			foreach ( get_object_taxonomies( $post->post_type, 'objects' ) as $to ) {
+				if ( empty( $to->public ) || empty( $to->rewrite ) ) {
+					continue;
+				}
+				$ts = get_the_terms( $post, $to->name );
+				foreach ( ( $ts && ! is_wp_error( $ts ) ) ? $ts : array() as $t ) {
+					$t_item( $t, $q );
+				}
+			}
+		} else {
+			$to = get_taxonomy( $tax );
+			$t  = ( $to && ! empty( $to->public ) && ! empty( $to->rewrite ) ) ? get_term( $id, $tax ) : null;
+			if ( ! $t || is_wp_error( $t ) || $t->count < 1 ) {
+				// Term rỗng (không còn trong export vì hide_empty) vẫn có link: trả kèm để gỡ được.
+				$gp = ( $t && ! is_wp_error( $t ) ) ? (string) ex_path( get_term_link( $t ) ) : '';
+				ex_out( array( 'p' => $gp, 'b' => $blog_id, 'k' => 'gone', 't' => $tax, 'id' => $id, 'q' => $q ) );
+				continue;
+			}
+			$t_item( $t, $q );
+		}
+	}
+	if ( $home && ( $hp = ex_path( home_url( '/' ) ) ) ) {
+		ex_out( array( 'p' => $hp, 'b' => $blog_id, 'k' => 'home', 't' => '', 'id' => 0, 'pg' => 1, 'q' => 'home' ) );
+	}
+	ex_line( sprintf( '# blog %d: --ids %d mục, %d dòng, boot %d ms, %.2f s',
+		$blog_id, count( $ex_ids[ $blog_id ] ?? array() ), $n, $boot_ms, microtime( true ) - $t1 ) );
+	fflush( STDOUT );
+	posix_kill( getmypid(), 9 );
 }
 
 // Bài đơn
