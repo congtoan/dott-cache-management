@@ -120,6 +120,10 @@ func cmdRegenAll(args []string) {
 	// taxonomy khác, archive post type); các trang phân trang /page/N/ sau cùng, N nhỏ trước.
 	// Trang quan trọng có cache mới sớm nhất nếu regen bị dừng giữa chừng.
 	bs := loadBlogScope(db, *blog)
+	lockSite(*site, cfg)
+	if *yes {
+		checkWrite(cfg, bs)
+	}
 	paths := activePaths(db, bs)
 	// Mồ côi luôn so với URL active của MỌI blog, để lọc theo blog không làm URL của blog khác thành mồ côi.
 	allActive := activePaths(db, nil)

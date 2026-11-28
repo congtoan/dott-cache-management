@@ -494,5 +494,58 @@ Mục đích: mô phỏng diaocthongthai.com để test tt-core, cache một b�
   - Chạy thử ban đầu mất 60 s cho 1.448 file, vì cũng nghỉ chờ load như khi ghi. Đã bỏ điều tiết cho chạy thử: còn 0,4 s.
 - **Lỗi của Claude, đã sửa trước khi commit:** `urls sync` bị treo (deadlock), vì đọc meta bằng `db` trong lúc transaction đang giữ kết nối duy nhất (`SetMaxOpenConns(1)`). Đã chuyển phần đọc ra trước `Begin()`.
 
+### P1: đo prefork trên production (28/11, chủ site giao)
+- **Cài đặt:**
+  - `wp-content/mu-plugins/dott-cache/prefork-render.php` trên **diaocthongthai.com** (user site, 644). Gọi qua HTTP thì trả 200 với 0 byte; trang chủ và `/en/` vẫn trả 200.
+  - Thêm `diaocthongthai.com` vào `/usr/local/sbin/dott-prefork` (backup `.bak-2026-11-28-p1`).
+- **Cách chạy:** 39 URL (1 trang chủ, 19 bài vi, 5 archive, 5 trang phân trang, 10 bài en), dùng `--no-delete`, vì production vẫn tách bản mobile. Không upload S3, không đụng KV.
+- **Kết quả:**
+  - 39/39 ok; `cached@` mới ở 39/39 URL. Như vậy **prefork ghi đè được file đang có** (trước đây chưa kiểm chứng).
+  - Bản mobile và `.mobile-active` không đổi.
+  - Load VPS chính tối đa 0,76.
+
+| 39 URL trên production | Tổng | Mỗi URL p50 | p95 |
+|---|---|---|---|
+| Prefork lần 1 | 15,4 s | 278 ms | 592 ms |
+| Prefork lần 2 (đã tắt log lỗi DB) | 13,1 s | 215 ms | 643 ms |
+| HTTP (PHP-FPM, tuần tự) | 14,5 s | 398 ms | 665 ms |
+
+  - **Trên production, phần lớn thời gian là chính việc render** (khoảng 200 ms mỗi trang), nên prefork chỉ nhanh hơn HTTP khoảng 1,8 lần, không phải 13 lần như trên php81.
+  - Ước tính site vi (24.273 URL): khoảng 1,5–2 giờ chưa tính thời gian nghỉ do điều tiết. Site en (36 nghìn URL, trang nhẹ hơn, p50 131 ms): khoảng 1,5 giờ.
+- **Phát hiện:**
+  - Plugin kk Star Ratings **ghi DB mỗi lượt render** (`UPDATE _kksr_avg`: 785 lần cho 39 URL). Ở chế độ READ ONLY các lệnh ghi này bị chặn (đúng ý), nhưng WordPress ghi log lỗi kèm backtrace cho từng lệnh. Đã tắt log lỗi (`suppress_errors`) trong tiến trình con. Lỗi DB không lọt vào HTML.
+  - So với bản render qua HTTP: bản prefork có LCP beacon và footer `cached@`; bản HTTP có `?dottprobe` nên WP Rocket không chèn 2 phần này, nên đây không phải lỗi. **Khác biệt thật duy nhất: bản prefork thiếu `<link href='https://fonts.gstatic.com' crossorigin rel='preconnect' />`** (cũng gặp trên php81). Ảnh hưởng nhỏ, **chưa sửa**, cần tìm nguyên nhân.
+
+### P0: chuẩn bị, chưa đụng site production (28/11)
+- **Worker v2:**
+  - Có đủ quy tắc của v7: redirect ảnh và tài liệu sang `cdn.diaocthongthai.com`, `/tag/` → `/tags/`, `/feed/`, `/map-*` → `/en/map-*`, `/en/ban-do*`, 410 cho `link_ds_*`. Bật bằng `REDIRECTS=1`.
+  - `LEGACY_PREFIXES` cho blog chưa chuyển (vd `["/en/"]`): chọn bản mobile hay desktop theo User-Agent như v7. Chỉ lấy `.html`, không lấy `_gzip`, để Cloudflare tự nén.
+  - Đã test trên workers.dev: vi NA desktop và iPhone đều nhận một bản; "en chưa chuyển" với iPhone nhận bản mobile; các redirect và 410 đúng; POST đi origin.
+- **`dott-cache sync [-full] -blog …`:**
+  - Chạy `urls sync`.
+  - URL mất: xóa key KV → xóa file trên server → xóa trên S3.
+  - URL mới, bài sửa, bài có bình luận mới, trang 1 của archive liên quan, trang chủ: chạy `update -txt`.
+  - `export-urls --since` lấy thêm bài có bình luận đã duyệt viết trong 48 giờ trước mốc.
+  - Test trên php81: sửa 1 bài và thêm 1 bình luận → `sync` cập nhật 5 URL. Đưa 1 bài vào thùng rác → `sync -full` xóa key KV, file trên server, object S3, cập nhật trang chủ. Khôi phục bài → `sync -full` thêm lại URL, PUT lại key.
+- **SSH thử lại:** trong lúc test, VPS chính từ chối một kết nối SSH (`Connection reset`, nhiều kết nối liền nhau), làm bước xóa file của bài đã gỡ bị bỏ qua. Đã thêm cơ chế thử lại (2 s, 5 s, 10 s) khi chưa nhận dòng output nào, cho mọi lệnh SSH. Kiểm tra lại: 6 lệnh liền nhau đều không lỗi.
+- **Khóa theo site** (`data/<site>/.lock`): lệnh ghi thứ hai bị từ chối. Gọi lồng nhau trong cùng tiến trình (`sync` → `update`) không bị chặn.
+- **`write_blogs`** trong config: lệnh ghi phải có `-blog` thuộc danh sách; `kv sync` toàn namespace bị chặn. Đã test trên php81.
+- **Config production** `config/sites/diaocthongthai.com.json` (nguồn `deploy/config/sites/`):
+  - đích Chicago `cdn.diaocthongthai.com`, KV `cc831…`, throttle 1,5;
+  - **`write_blogs: ["-"]` = chưa cho ghi blog nào.**
+  - Đã thử: `update`, `update -all`, `sync` với `-blog /` đều báo "không cho /". Kiểm kê chỉ đọc vẫn chạy.
+- **Kiểm kê chỉ đọc site vi trên production** (`update -all -blog /`, không `-yes`, 28/11):
+
+| | |
+|---|---|
+| URL trong DB | 24.273 |
+| S3 Chicago | 24.028 `index-https.html` giữ; **72.089 file kiểu cũ** (mobile, `_gzip`) sẽ xóa; 10 path mồ côi (38 file) |
+| KV | 9 key mồ côi (8 term rỗng và 1 bài đã xóa, như lần so với DB cũ) |
+| Server | 22.011 html; **66.468 file mobile** sẽ xóa; 111 path mồ côi (222 file); 2.262 URL chưa có cache. Quét mất 168 s |
+
+  Mồ côi nhiều nhất 111 path (0,46%), dưới ngưỡng 2%.
+- **mu-plugin `dott-single-cache` 1.1.0:** hằng số `DOTT_SINGLE_CACHE_BLOGS` (`null` = mọi blog; `array(1)` = chỉ site vi). Đã cài lên php81 (giá trị `null`): `/tttest/` vẫn có `cache_mobile=1`, `do_caching_mobile_files=0`. Sau khi đổi danh sách phải tạo lại file `wp-rocket-config` của blog đó.
+- **Lịch chạy (chưa bật):** `deploy/systemd/` gồm `sync@` (8 giờ/lần), `sync-full@` (hằng ngày), `update-all@` (hằng tháng), instance `vi`/`en`. `dott-cache-run.sh` ghi log, dọn log quá 30 ngày, và cho các lịch chạy nối đuôi nhau (`.cronlock`). Script đã chép vào `bin/` và chạy thử dry-run, nhưng **chưa cài unit**.
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.

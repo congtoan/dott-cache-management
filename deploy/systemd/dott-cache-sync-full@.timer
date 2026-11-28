@@ -1,0 +1,9 @@
+[Unit]
+Description=dott-cache sync -full %i hằng ngày
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

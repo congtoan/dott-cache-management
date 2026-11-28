@@ -166,8 +166,15 @@ if ( $types ) {
 	$in  = implode( ',', array_map( function ( $t ) use ( $wpdb ) {
 		return $wpdb->prepare( '%s', $t );
 	}, $types ) );
+	// Chế độ --since: bài sửa sau mốc, HOẶC bài có bình luận đã duyệt viết trong 48 giờ trước mốc trở đi.
+	// Bình luận mới không làm đổi post_modified; bình luận có thể được duyệt trễ (DB không lưu giờ duyệt),
+	// nên lùi thêm 48 giờ. Đổi lại, các bài này được làm mới vài lần liên tiếp.
+	$cond = $ex_since ? $wpdb->prepare(
+		" AND ( post_modified_gmt >= FROM_UNIXTIME(%d) OR ID IN ( SELECT comment_post_ID FROM {$wpdb->comments}
+			WHERE comment_approved = '1' AND comment_date_gmt >= FROM_UNIXTIME(%d) ) )",
+		$ex_since, $ex_since - 172800 ) : '';
 	$sql = "SELECT ID, post_type, UNIX_TIMESTAMP(post_modified_gmt) AS m FROM {$wpdb->posts}
-		WHERE post_status = 'publish' AND post_type IN ($in)" . ( $ex_since ? $wpdb->prepare( ' AND post_modified_gmt >= FROM_UNIXTIME(%d)', $ex_since ) : '' ) . ' ORDER BY ID';
+		WHERE post_status = 'publish' AND post_type IN ($in)" . $cond . ' ORDER BY ID';
 	$rows = $wpdb->get_results( $sql );
 	$taxes = get_taxonomies( array( 'public' => true ) );
 	foreach ( array_chunk( $rows, 500 ) as $chunk ) {

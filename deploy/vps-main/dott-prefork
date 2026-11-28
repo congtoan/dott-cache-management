@@ -19,7 +19,7 @@ set -uo pipefail
 site="${1:-}"
 case "$site" in
   php81.congtoan.net) user=php81conZSI; root=/home/php81conZSI/php81.congtoan.net/public_html ;;
-  # diaocthongthai.com) user=diaocthDP4f; root=/home/diaocthDP4f/diaocthongthai.com/public_html ;;  # chưa bật
+  diaocthongthai.com) user=diaocthDP4f; root=/home/diaocthDP4f/diaocthongthai.com/public_html ;;  # bật 28/11 (P1)
   *) echo "# domain không được phép: '$site'"; echo "DONE ok=0 fail=0 skip=0"; exit 2 ;;
 esac
 shift

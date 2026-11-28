@@ -21,6 +21,8 @@ print(json.dumps({
   "bindings": [
     {"type": "kv_namespace", "name": "CACHE", "namespace_id": sys.argv[1]},
     {"type": "plain_text", "name": "ORIGIN", "text": "https://php81.congtoan.net"},
+    {"type": "plain_text", "name": "REDIRECTS", "text": "1"},
+    {"type": "plain_text", "name": "LEGACY_PREFIXES", "text": json.dumps(["/tttest-en/"])},
     {"type": "plain_text", "name": "TARGETS", "text": json.dumps({
         "NA": "https://us-ord-1.linodeobjects.com/congtoanphp/_cache_html",
         "SA": "https://us-ord-1.linodeobjects.com/congtoanphp/_cache_html",

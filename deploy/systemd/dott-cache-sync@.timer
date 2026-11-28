@@ -1,0 +1,10 @@
+[Unit]
+Description=dott-cache sync %i 8 giờ/lần
+
+[Timer]
+OnCalendar=*-*-* 02,10,18:15:00
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

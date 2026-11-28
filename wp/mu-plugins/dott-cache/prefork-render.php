@@ -484,6 +484,11 @@ foreach ( $pf_paths as $path ) {
 			$wpdb->db_connect();
 			if ( $pf_readonly ) {
 				$wpdb->query( 'SET SESSION TRANSACTION READ ONLY' );
+				// Plugin vẫn cố ghi DB khi render (vd kk Star Ratings UPDATE _kksr_avg mỗi lượt xem: 785 lần
+				// cho 39 URL trên production, 28/11). READ ONLY chặn các lệnh ghi đó; tắt log lỗi để WordPress
+				// không tạo backtrace và ghi stderr cho từng lệnh (tốn thời gian, làm rối output).
+				$wpdb->suppress_errors( true );
+				$wpdb->show_errors( false );
 			}
 			wp_cache_init(); // kết nối cache riêng (Redis nếu có)
 			pf_server( $pf_host, $path, 'GET' );

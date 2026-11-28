@@ -29,7 +29,14 @@ type genStats struct {
 
 // remoteLoad đọc load 1 phút của VPS chính (dott-prefork <domain> --loadavg).
 func remoteLoad(ctx context.Context, cfg Config) (float64, error) {
-	out, err := exec.CommandContext(ctx, "ssh", "-n", "-o", "BatchMode=yes", cfg.Renew.SSHHost, cfg.Renew.Command+" --loadavg").Output()
+	var out []byte
+	var err error
+	for i := 0; i < 3; i++ { // SSH đôi khi bị VPS chính từ chối khi nhiều kết nối liền nhau
+		if out, err = exec.CommandContext(ctx, "ssh", "-n", "-o", "BatchMode=yes", cfg.Renew.SSHHost, cfg.Renew.Command+" --loadavg").Output(); err == nil {
+			break
+		}
+		time.Sleep(time.Duration(2*(i+1)) * time.Second)
+	}
 	if err != nil {
 		return 0, err
 	}

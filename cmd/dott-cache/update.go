@@ -104,6 +104,8 @@ func cmdUpdate(args []string) {
 	}
 	defer db.Close()
 	bs := loadBlogScope(db, *sf.blog)
+	lockSite(*site, cfg)
+	checkWrite(cfg, bs)
 	paths := gatherPaths(ctx, cfg, db, *site, sf, bs)
 	if len(paths) == 0 {
 		die("không có URL nào")
@@ -142,7 +144,7 @@ func cmdUpdate(args []string) {
 		wg.Add(1)
 		go func(c *s3.Client) { // các đích chạy song song
 			defer wg.Done()
-			keys := oldStyleKeys(ctx, c, paths)
+			keys := keysInDirs(ctx, c, paths, false)
 			n, fails := deleteKeys(ctx, c, keys, 4)
 			fmt.Printf("[2] S3 %s: file kiểu cũ (mobile, _gzip) có %d, đã xóa %d, lỗi %d (%.1f s)\n", c.T.ID, len(keys), n, len(fails), time.Since(t).Seconds())
 		}(c)
@@ -278,9 +280,10 @@ func defaultListFile(cfg Config, site string) string {
 	return f
 }
 
-// oldStyleKeys: các object kiểu cũ (mọi file không phải index-https.html) nằm đúng trong thư mục của các path.
+// keysInDirs: các object nằm đúng trong thư mục của các path (không tính thư mục con). includeHTML = false:
+// chỉ file kiểu cũ (mọi file không phải index-https.html); true: mọi file (dùng khi gỡ URL đã mất).
 // Nhiều path thì LIST cả prefix một lần; ít thì LIST theo từng path (song song).
-func oldStyleKeys(ctx context.Context, c *s3.Client, paths []string) []string {
+func keysInDirs(ctx context.Context, c *s3.Client, paths []string, includeHTML bool) []string {
 	want := map[string]bool{}
 	for _, p := range paths {
 		want[keyFor(c.T.Prefix, p, "")] = true // "<prefix>tttest/abc/"
@@ -292,7 +295,7 @@ func oldStyleKeys(ctx context.Context, c *s3.Client, paths []string) []string {
 		if j := strings.LastIndex(o.Key, "/"); j >= 0 {
 			dir, file = o.Key[:j+1], o.Key[j+1:]
 		}
-		if want[dir] && file != "index-https.html" {
+		if want[dir] && (includeHTML || file != "index-https.html") {
 			mu.Lock()
 			keys = append(keys, o.Key)
 			mu.Unlock()

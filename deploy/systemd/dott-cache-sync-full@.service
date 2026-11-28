@@ -1,0 +1,11 @@
+[Unit]
+Description=dott-cache sync -full %i (hằng ngày)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/root/tool/cache-system/bin/dott-cache-blog.sh %i sync-full
+MemoryMax=300M
+Nice=10
+CPUQuota=50%
+TimeoutStartSec=4h

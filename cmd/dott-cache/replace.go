@@ -77,6 +77,7 @@ func cmdReplace(args []string) {
 		die("%v", err)
 	}
 	bs := loadBlogScope(db, *sf.blog)
+	lockSite(*site, cfg)
 	var paths []string
 	if !all {
 		paths = gatherPaths(ctx, cfg, db, *site, sf, bs)
@@ -142,6 +143,7 @@ func cmdReplace(args []string) {
 		fmt.Println("Chưa ghi gì. Chạy lại với -yes để thực hiện.")
 		return
 	}
+	checkWrite(cfg, bs)
 
 	// Điều kiện kiểm tra nội dung trước khi upload.
 	if *content && !*isRegex {

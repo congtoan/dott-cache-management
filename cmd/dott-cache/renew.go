@@ -176,24 +176,47 @@ func cmdRenew(args []string) {
 
 // runRemote chạy dott-prefork trên VPS chính qua ssh, gửi path qua stdin, đọc kết quả dạng
 // "R {json}" / "# log" / "DONE ...". Trả về path thành công và path lỗi (kèm lý do).
+//
+// Nếu SSH không kết nối được (exit 255, chưa nhận dòng nào: vd VPS chính từ chối vì nhiều kết nối liền nhau,
+// gặp 28/11) thì thử lại tối đa 3 lần (2 s, 5 s, 10 s). Đã nhận output thì không thử lại (lệnh có thể đã chạy).
 func runRemote(ctx context.Context, host, command, stage string, paths []string, results chan<- result) ([]string, map[string]string, error) {
+	var ok []string
+	var failed map[string]string
+	var err error
+	for attempt, wait := range []time.Duration{0, 2 * time.Second, 5 * time.Second, 10 * time.Second} {
+		if attempt > 0 {
+			fmt.Printf("    SSH tới %s lỗi (%v), thử lại sau %s\n", host, err, wait)
+			time.Sleep(wait)
+		}
+		var lines int
+		ok, failed, lines, err = runRemoteOnce(ctx, host, command, stage, paths, results)
+		if err == nil || lines > 0 || ctx.Err() != nil {
+			return ok, failed, err
+		}
+	}
+	return ok, failed, err
+}
+
+func runRemoteOnce(ctx context.Context, host, command, stage string, paths []string, results chan<- result) ([]string, map[string]string, int, error) {
 	cmd := exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", host, command)
 	cmd.Stdin = strings.NewReader(strings.Join(paths, "\n") + "\n")
 	cmd.Stderr = os.Stderr
 	out, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	if err := cmd.Start(); err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	var ok []string
 	failed := map[string]string{}
 	done := false
+	lines := 0
 	sc := bufio.NewScanner(out)
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
 	for sc.Scan() {
 		l := sc.Text()
+		lines++
 		switch {
 		case strings.HasPrefix(l, "R "):
 			var p preforkLine
@@ -240,9 +263,9 @@ func runRemote(ctx context.Context, host, command, stage string, paths []string,
 	}
 	werr := cmd.Wait()
 	if !done {
-		return ok, failed, fmt.Errorf("lệnh trên VPS chính dừng giữa chừng (%v)", werr)
+		return ok, failed, lines, fmt.Errorf("lệnh trên VPS chính dừng giữa chừng (%v)", werr)
 	}
-	return ok, failed, nil
+	return ok, failed, lines, nil
 }
 
 func oneLine(s string) string {

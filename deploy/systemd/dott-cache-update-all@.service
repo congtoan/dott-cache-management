@@ -1,0 +1,11 @@
+[Unit]
+Description=dott-cache update -all %i (hằng tháng)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/root/tool/cache-system/bin/dott-cache-blog.sh %i update-all
+MemoryMax=300M
+Nice=10
+CPUQuota=50%
+TimeoutStartSec=12h

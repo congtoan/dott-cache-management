@@ -90,6 +90,10 @@ func cmdKV(args []string) {
 			fmt.Println("  " + k)
 		}
 	case "sync":
+		if len(cfg.WriteBlogs) > 0 && !*dry {
+			die("config có write_blogs: kv sync toàn namespace bị chặn (dùng update/sync với -blog, hoặc -dry-run)")
+		}
+		lockSite(*site, cfg)
 		kvSync(ctx, c, cfg, *site, *dry, *force)
 	default:
 		usage()

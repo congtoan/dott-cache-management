@@ -44,6 +44,9 @@ type Config struct {
 	KV       KVConfig          `json:"kv"`
 	Throttle ThrottleConfig    `json:"throttle"`
 	Lists    string            `json:"lists_dir"` // thư mục danh sách URL (mặc định lists/<domain>/)
+	// WriteBlogs: có giá trị (vd ["/"]) thì mọi lệnh ghi (update, replace, sync) phải có -blog thuộc danh sách
+	// này; kv sync toàn namespace bị chặn. Dùng khi chuyển production từng blog.
+	WriteBlogs []string `json:"write_blogs"`
 }
 
 // ThrottleConfig: điều tiết theo load của VPS chính (1 vCPU: một tiến trình prefork đã chiếm load ≈ 1).
@@ -116,6 +119,8 @@ func main() {
 		cmdUpdate(os.Args[2:])
 	case "replace":
 		cmdReplace(os.Args[2:])
+	case "sync":
+		cmdSync(os.Args[2:])
 	case "regen-all": // tên cũ của "update -all"
 		cmdRegenAll(os.Args[2:])
 	default:
@@ -131,6 +136,8 @@ func usage() {
                     [-mode auto|http|prefork] [-http-max 4] [-batch 200] [-yes]
       -urls / -segment không có giá trị: hỏi nhập; -txt không có giá trị: lists/<domain>/update.txt
       -blog "/" | "/en/" | blog_id: chỉ một subsite (dùng được với mọi phạm vi, kể cả -all)
+  CHẠY THEO LỊCH (thay đổi trên site → cache, S3, KV):
+  dott-cache sync -site <domain> [-blog /] [-full] [-dry-run]   (8 giờ/lần không -full; 1 lần/ngày -full)
   SỬA NHANH FILE CACHE (không render lại; server + S3):
   dott-cache replace -site <domain> -content -search "cũ" -replace "mới" [-regex] <phạm vi> [-yes]
   dott-cache replace -site <domain> -version [-files generatepress_child/style.css,...] <phạm vi> [-yes]

@@ -69,7 +69,16 @@ func siteData(site string, cfg Config) string {
 	return filepath.Join(home(), "data", site)
 }
 
-func cmdURLSync(args []string) {
+// syncResult: thay đổi mà một lần urls sync tìm thấy (dùng cho lệnh sync).
+type syncResult struct {
+	Full                              bool
+	Added, Changed, Removed, Archives []string
+}
+
+func cmdURLSync(args []string) { urlSync(args) }
+
+func urlSync(args []string) *syncResult {
+	res := &syncResult{}
 	fs := flag.NewFlagSet("urls sync", flag.ExitOnError)
 	site := fs.String("site", "", "domain, dùng config/sites/<domain>.json")
 	cfgPath := fs.String("config", "", "file cấu hình JSON (thay cho -site)")
@@ -115,20 +124,24 @@ func cmdURLSync(args []string) {
 		sinceUnix = v
 	}
 	full := sinceUnix == 0
+	res.Full = full
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// 1. Lấy danh sách từ site.
-	var src io.Reader
-	var cmd *exec.Cmd
+	// 1. Lấy danh sách từ site. SSH không kết nối được (chưa nhận dòng nào) thì thử lại tối đa 3 lần.
+	var urls []exportURL
+	var done bool
 	if *from != "" {
 		f, err := os.Open(*from)
 		if err != nil {
 			die("%v", err)
 		}
-		defer f.Close()
-		src = f
+		urls, done, err = readExport(f)
+		f.Close()
+		if err != nil {
+			die("đọc export: %v", err)
+		}
 	} else {
 		if cfg.Renew.SSHHost == "" || cfg.Renew.Command == "" {
 			die("config thiếu renew.ssh_host / renew.command (hoặc dùng -from)")
@@ -137,23 +150,29 @@ func cmdURLSync(args []string) {
 		if !full {
 			c += fmt.Sprintf(" --since=%d", sinceUnix)
 		}
-		cmd = exec.CommandContext(ctx, "ssh", "-n", "-o", "BatchMode=yes", cfg.Renew.SSHHost, c)
-		cmd.Stderr = os.Stderr
-		out, err := cmd.StdoutPipe()
-		if err != nil {
-			die("%v", err)
+		for attempt, wait := range []time.Duration{0, 2 * time.Second, 5 * time.Second, 10 * time.Second} {
+			if attempt > 0 {
+				fmt.Printf("    SSH lỗi, thử lại sau %s\n", wait)
+				time.Sleep(wait)
+			}
+			cmd := exec.CommandContext(ctx, "ssh", "-n", "-o", "BatchMode=yes", cfg.Renew.SSHHost, c)
+			cmd.Stderr = os.Stderr
+			out, err := cmd.StdoutPipe()
+			if err != nil {
+				die("%v", err)
+			}
+			if err := cmd.Start(); err != nil {
+				die("ssh: %v", err)
+			}
+			urls, done, err = readExport(out)
+			cmd.Wait()
+			if err != nil {
+				die("đọc export: %v", err)
+			}
+			if done || len(urls) > 0 || ctx.Err() != nil {
+				break
+			}
 		}
-		if err := cmd.Start(); err != nil {
-			die("ssh: %v", err)
-		}
-		src = out
-	}
-	urls, done, err := readExport(src)
-	if cmd != nil {
-		cmd.Wait()
-	}
-	if err != nil {
-		die("đọc export: %v", err)
 	}
 	if !done {
 		die("export dừng giữa chừng (không có dòng DONE): không ghi gì vào DB")
@@ -211,8 +230,14 @@ func cmdURLSync(args []string) {
 		switch {
 		case !ok || r.status != "active":
 			added++
+			res.Added = append(res.Added, u.P)
 		case u.K == "single" && (!r.modified.Valid || r.modified.Int64 != u.M):
 			changed++
+			res.Changed = append(res.Changed, u.P)
+		case !full && u.K == "single":
+			// chế độ -since: bài có bình luận mới (post_modified không đổi) vẫn được xuất, cần làm mới
+			changed++
+			res.Changed = append(res.Changed, u.P)
 		}
 	}
 	var removed []string
@@ -224,6 +249,7 @@ func cmdURLSync(args []string) {
 		}
 		sort.Strings(removed)
 	}
+	res.Removed = removed
 
 	// Archive bị ảnh hưởng bởi bài đã đổi (chế độ -since): trang 1 của các term của bài.
 	affected := 0
@@ -236,9 +262,11 @@ func cmdURLSync(args []string) {
 		}
 		for k := range ids {
 			b, t, _ := strings.Cut(k, ":")
-			var n int
-			db.QueryRow(`SELECT COUNT(*) FROM urls WHERE status='active' AND kind='term' AND page=1 AND blog_id=? AND obj_id=?`, b, t).Scan(&n)
-			affected += n
+			var ap string
+			if db.QueryRow(`SELECT path FROM urls WHERE status='active' AND kind='term' AND page=1 AND blog_id=? AND obj_id=?`, b, t).Scan(&ap) == nil {
+				affected++
+				res.Archives = append(res.Archives, ap)
+			}
 		}
 	}
 
@@ -273,7 +301,7 @@ func cmdURLSync(args []string) {
 	}
 	if *dry {
 		fmt.Println("(dry-run: không ghi DB)")
-		return
+		return res
 	}
 
 	// Map blog_id → path blog (vd 2 → "/en/"), dùng cho lọc "-blog". Gộp với map đã có.
@@ -338,6 +366,7 @@ func cmdURLSync(args []string) {
 		die("commit: %v", err)
 	}
 	fmt.Printf("đã ghi %s/state.db trong %.1f s (tổng %.1f s)\n", dir, time.Since(started).Seconds()-tExport.Seconds(), time.Since(started).Seconds())
+	return res
 }
 
 // readExportQuiet: như readExport nhưng không in log.

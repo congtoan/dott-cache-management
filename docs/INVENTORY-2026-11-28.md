@@ -109,6 +109,32 @@
 
 Sau khi chuyển sang một bản HTML, bỏ được khoảng 58 nghìn file mobile và gzip của chúng. Cache sẽ còn khoảng một nửa.
 
+## 4b. Cập nhật sau P0 và P1 (28/11 chiều)
+
+Xong (chi tiết trong rollout-log):
+- **3.1** lệnh `sync`;
+- **3.2** bình luận được bắt bằng `export --since` (bài có bình luận đã duyệt trong 48 giờ trước mốc);
+- **3.3** Worker v2 có đủ quy tắc của v7, cộng chế độ cũ cho blog chưa chuyển;
+- **3.4** khóa theo site, lịch chạy (chưa bật), dọn log;
+- **3.5** config production, khóa bằng `write_blogs: ["-"]`;
+- mu-plugin `dott-single-cache` 1.1.0 bật theo blog;
+- P1 đo trên production.
+
+Còn lại trước P6:
+- thiếu preconnect `fonts.gstatic.com` trong bản prefork (nhỏ);
+- `export-urls.php` và `replace-cache.php` chưa cài vào site production (thuộc P4).
+
+Cách chạy 2 lần (vi trước, en sau), theo kế hoạch của chủ site:
+- **Lần 1 (vi):**
+  - P2: theme `generatepress_child`;
+  - P3: plugin sticky 3.2.0 dùng chung cả mạng, an toàn cho en vì theme en chưa có tt-core nên plugin chạy như 3.1.0;
+  - P4: `DOTT_SINGLE_CACHE_BLOGS = array(1)`;
+  - P5: tắt phần vi của cron cũ;
+  - P6: `write_blogs: ["/"]`, rồi `update -all -blog /`;
+  - P7: Worker v2 với `LEGACY_PREFIXES: ["/en/"]`.
+- **Lần 2 (en):** `generatepress_en`, `array(1, 2)`, `write_blogs: ["/", "/en/"]`, `update -all -blog /en/`, bỏ `LEGACY_PREFIXES`.
+- **Cần lưu ý:** sau P6 lần 1, S3 không còn bản mobile và `_gzip` của vi. Worker v7 sẽ chuyển khách châu Mỹ của site vi sang origin (vẫn đúng, chỉ chậm hơn) cho tới khi **P7 thay bằng Worker v2**. Vì vậy nên làm P7 ngay sau P6.
+
 ## 5. Đề xuất các bước lên production (mỗi bước hỏi chủ site trước, có backup, ghi rollout-log)
 
 | # | Bước | Ghi trên production? | Quay lại |
