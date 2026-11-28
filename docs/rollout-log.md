@@ -648,5 +648,28 @@ Chủ site chọn cập nhật gần như ngay (INVENTORY mục 3.A.2), thay vì
 
 Dữ liệu test để lại trên php81: excerpt của bài 150 có chữ "t0…t5"; 2 bình luận test đã vào thùng rác.
 
+### Key riêng cho tunnel + test đường thật WordPress → tunnel → serve (28/11 16:26–16:30, chủ site duyệt)
+- **VPS phụ:** key `/root/.ssh/id_dott_tunnel` (ed25519), alias `main-tunnel` trong `/root/.ssh/config` (backup `config.bak-2026-11-28-1626`), có `BatchMode yes`, `PasswordAuthentication no`.
+- **VPS chính:** thêm dòng 2 vào `/root/.ssh/authorized_keys` (backup `authorized_keys.bak-2026-11-28-1626`):
+  `from="139.180.158.221",restrict,port-forwarding,permitlisten="127.0.0.1:8790",permitopen="127.0.0.1:1",command="/bin/false"`.
+  - Lần đầu dùng `permitopen="none"`: OpenSSH 8.2 không nhận nên **bỏ qua cả dòng key** (đăng nhập bị từ chối, log không ghi lý do). Đổi sang `127.0.0.1:1` (không có gì nghe).
+  - Lần đầu client còn thử mật khẩu 2 lần, vì alias chưa có `BatchMode`. Đã thêm `BatchMode` để không gây báo động brute-force.
+- **Kiểm tra giới hạn của key:** chạy lệnh: không (exit 1, không có output); `-L` tới cổng 22: bị chặn; `-R` cổng 8791: bị từ chối; `-R 0.0.0.0:8790`: bị từ chối; key cũ vẫn dùng được.
+- **Tunnel chạy** (`dott-cache-tunnel.service`, chưa enable): VPS chính `127.0.0.1:8790` nghe; `/health` 200 sau 4,7 ms.
+
+| Test (wp-cli trên php81, không có listener tạm) | Lệnh `wp` | Từ lúc lưu tới khi cache mới có trên server, S3 2 đích và KV |
+|---|---|---|
+| R1 sửa bài | 2,47 s | 12,7 s (làm mới 3 URL) |
+| R2 bình luận đã duyệt | 1,07 s | 8,3 s |
+| R3 đổi slug | 1,39 s | 12,7 s (gỡ URL cũ: KV và S3 2 đích hết; URL mới KV +1) |
+| R3b trả slug | 1,45 s | 12,7 s |
+| R6 sửa term | 1,65 s | 8,8 s |
+| R5 tunnel tắt | 1,42 s | (sự kiện mất, như thiết kế) |
+
+- Thời gian chia ra: gom sự kiện khoảng 5 s (`-debounce 3s`, cộng phần chờ tới lượt resolver), `--ids` 1,3–2,1 s, render HTTP 0,4–0,6 s, upload + KV 1,6–4,4 s. Muốn nhanh hơn thì giảm `-debounce`.
+- Lệnh `wp` có tunnel và không có tunnel nhanh như nhau (1,1–2,5 s, gần như toàn bộ là thời gian nạp WordPress của wp-cli).
+- Chưa test qua trình duyệt (admin sửa bài qua PHP-FPM, Gutenberg 2 request). `wp_remote_post` dùng chung mã nên dự kiến như wp-cli; cần xem khi bật production.
+- Bình luận test đã vào thùng rác.
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.

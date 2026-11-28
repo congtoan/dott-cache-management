@@ -5,10 +5,13 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# Alias main-tunnel (/root/.ssh/config) dùng key riêng /root/.ssh/id_dott_tunnel. Trên VPS chính key này có
+#   from="139.180.158.221",restrict,port-forwarding,permitlisten="127.0.0.1:8790",permitopen="127.0.0.1:1",command="/bin/false"
+# (OpenSSH 8.2 không nhận permitopen="none"; cổng 1 không có gì nghe nên -L vô dụng).
 # GatewayPorts no trên VPS chính: cổng chỉ mở trên loopback của VPS chính.
 # ExitOnForwardFailure: cổng đang bị chiếm thì thoát và thử lại, không chạy "giả".
 ExecStart=/usr/bin/ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
-  -R 127.0.0.1:8790:127.0.0.1:8790 main
+  -R 127.0.0.1:8790:127.0.0.1:8790 main-tunnel
 Restart=always
 RestartSec=10
 MemoryMax=50M

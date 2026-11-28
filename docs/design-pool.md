@@ -76,9 +76,9 @@ Upload của lô trước chạy gối đầu với render của lô sau.
 - `serve` bind `127.0.0.1` (quy tắc CLAUDE.md), `MemoryMax`. Không mở cổng public.
 - Tunnel dùng `GatewayPorts no` của VPS chính: cổng 8790 chỉ mở trên loopback VPS chính.
 - Mọi process trên VPS chính gọi được cổng loopback, nên vẫn cần token: mỗi site một token (`config/secrets/hook-<site>.token` trên VPS phụ, `dott-cache-hook.json` trên site), so bằng `subtle.ConstantTimeCompare`; host trong body phải khớp token.
-- Tunnel **cần key riêng**: key root `main` có `no-port-forwarding` (đo 28/11). Dòng đề xuất trong `/root/.ssh/authorized_keys` của VPS chính:
-  `from="139.180.158.221",restrict,port-forwarding,permitlisten="127.0.0.1:8790",permitopen="none",command="/bin/false" ssh-ed25519 … dott-cache-tunnel`
-  (`restrict` tắt mọi thứ, `port-forwarding` bật lại forward, `permitlisten` chỉ cho mở đúng cổng loopback đó, `permitopen="none"` cấm `-L`, `command="/bin/false"` cấm chạy lệnh). Trên VPS phụ: key `/root/.ssh/id_dott_tunnel`, unit tunnel dùng `-i` key này.
+- Tunnel dùng **key riêng** (key root `main` có `no-port-forwarding`). Đã cài 28/11, dòng trong `/root/.ssh/authorized_keys` của VPS chính:
+  `from="139.180.158.221",restrict,port-forwarding,permitlisten="127.0.0.1:8790",permitopen="127.0.0.1:1",command="/bin/false" ssh-ed25519 … dott-cache-tunnel`
+  (`restrict` tắt mọi thứ, `port-forwarding` bật lại forward, `permitlisten` chỉ cho mở đúng cổng loopback đó, `permitopen` chỉ cho `-L` tới cổng 1 không có gì nghe (OpenSSH 8.2 không nhận `"none"`), `command="/bin/false"` cấm chạy lệnh). Trên VPS phụ: key `/root/.ssh/id_dott_tunnel`, alias `main-tunnel`.
 - Lô HTTP (≤ 4 URL) không chờ load (đo 28/11: chờ 47 s cho một lần sửa bài là ngược mục tiêu); lô prefork vẫn điều tiết.
 
 ## 10. Thứ tự triển khai
