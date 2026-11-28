@@ -72,6 +72,7 @@ Agent mới đọc tài liệu cũ nên biết các điểm này để khỏi l�
 | `v2-phase1` | `dc162c8` | Giai đoạn 0–1 xong: lấy HTML qua HTTP khớp với đĩa |
 | `v2-handoff-1` | `1eea25b` | Thư mục handoff đầu tiên, `legacy/` được tách riêng |
 | `v2-prototypes-2026-11-27` | `406dfe9` | tt-core, Go uploader, single-cache, prefork: tất cả mới ở mức prototype trên php81 |
+| `v2-tools-2026-11-28` | `a31fd57` | Bộ lệnh `dott-cache` (urls, update, replace, kv), Worker v2 test, bố cục `/root/tool/cache-system`, prefork và export nằm trong site. Đã test trên php81, production chưa chuyển. Kiểm kê: [INVENTORY-2026-11-28.md](INVENTORY-2026-11-28.md) |
 
 Quy ước tag về sau:
 - `v2-phaseN` khi xong một giai đoạn trong lộ trình (design mục 14);

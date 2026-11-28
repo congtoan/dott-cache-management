@@ -2,6 +2,7 @@
 
 > Điểm bắt đầu cho hội thoại mới. Đọc file này, rồi tới [docs/HISTORY.md](docs/HISTORY.md) (lịch sử, các tag, những điều từng hiểu sai), [docs/design-server-only.md](docs/design-server-only.md) và [docs/rollout-log.md](docs/rollout-log.md).
 > Tổng kết đợt prototype 27–28/11 kèm số đo: [docs/SUMMARY-2026-11-27.md](docs/SUMMARY-2026-11-27.md).
+> **Kiểm kê mới nhất, phần còn thiếu và các bước lên production (P0–P8):** [docs/INVENTORY-2026-11-28.md](docs/INVENTORY-2026-11-28.md). Tag `v2-tools-2026-11-28`.
 > Mọi thứ cũ hơn (pipeline Python, PC) đã chuyển vào `legacy/`. Chỉ xem lại khi cần tham khảo logic.
 
 ## 1. Bối cảnh trong 1 phút

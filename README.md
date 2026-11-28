@@ -12,6 +12,7 @@ Cloudflare Worker phục vụ HTML từ S3 cho khách ở xa, khách gần đi t
 
 > **Bắt đầu ở đâu:**
 > 1. [HANDOFF.md](HANDOFF.md): trạng thái hiện tại, việc tiếp theo, quy tắc an toàn.
+> 1b. [docs/INVENTORY-2026-11-28.md](docs/INVENTORY-2026-11-28.md): **kiểm kê mới nhất**, gồm lệnh đã có, phần còn thiếu, các bước lên production.
 > 2. [docs/SUMMARY-2026-11-27.md](docs/SUMMARY-2026-11-27.md): tổng kết đợt prototype (tt-core, sticky 3.2.0, một bản HTML, rocket-nginx, Go uploader, prefork) kèm số đo.
 > 3. [docs/HISTORY.md](docs/HISTORY.md): lịch sử phát triển, vì sao đổi hướng, những điều từng hiểu sai.
 > 4. [docs/design-server-only.md](docs/design-server-only.md): thiết kế v2.
