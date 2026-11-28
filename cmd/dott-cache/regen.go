@@ -103,6 +103,7 @@ func cmdRegenAll(args []string) {
 	purgeFirst := fs.Bool("purge-all-first", false, "xóa hết file cache trên server ngay từ đầu")
 	keepOrphans := fs.Bool("keep-orphans", false, "KHÔNG xóa cache mồ côi (URL không còn trong DB) trên server, S3, KV")
 	force := fs.Bool("force", false, "bỏ qua kiểm tra DB cũ / số mồ côi vượt ngưỡng")
+	blog := fs.String("blog", "", "chỉ một blog: path (\"/\", \"/en/\") hoặc blog_id; dọn mồ côi cũng chỉ trong blog đó")
 	logPath := fs.String("log", "", "ghi kết quả từng URL ra JSONL")
 	fs.Parse(args)
 
@@ -115,37 +116,38 @@ func cmdRegenAll(args []string) {
 	if err != nil {
 		die("%v", err)
 	}
-	var paths []string
 	// Thứ tự (chủ site chốt 28/11): trang chủ, bài đơn trước; rồi trang 1 của archive (category, tag,
 	// taxonomy khác, archive post type); các trang phân trang /page/N/ sau cùng, N nhỏ trước.
 	// Trang quan trọng có cache mới sớm nhất nếu regen bị dừng giữa chừng.
-	rows, err := db.Query(`SELECT path FROM urls WHERE status='active'
-		ORDER BY CASE WHEN kind='home' THEN 0 WHEN kind='single' THEN 1 WHEN page=1 THEN 2 ELSE 3 END,
-		         page, blog_id, CASE obj_type WHEN 'category' THEN 0 WHEN 'post_tag' THEN 1 ELSE 2 END, path`)
-	if err != nil {
-		die("%v", err)
-	}
-	for rows.Next() {
-		var p string
-		rows.Scan(&p)
-		paths = append(paths, p)
-	}
-	rows.Close()
+	bs := loadBlogScope(db, *blog)
+	paths := activePaths(db, bs)
+	// Mồ côi luôn so với URL active của MỌI blog, để lọc theo blog không làm URL của blog khác thành mồ côi.
+	allActive := activePaths(db, nil)
 	lastFull, _ := strconv.ParseInt(store.Meta(db, "urls_full_last"), 10, 64)
 	db.Close()
 	if len(paths) == 0 {
 		die("DB không có URL active: chạy 'dott-cache urls sync' trước")
 	}
 	dbAge := time.Since(time.Unix(lastFull, 0))
-	keep := map[string]bool{}
+	keep := map[string]bool{} // URL trong phạm vi (sẽ generate)
 	for _, p := range paths {
 		keep[kv.Key(p)] = true
+	}
+	keepAll := map[string]bool{} // URL active của mọi blog (để xác định mồ côi)
+	for _, p := range allActive {
+		keepAll[kv.Key(p)] = true
+	}
+	// Dòng phạm vi gửi kèm cho PHP (--purge-cache): chỉ đụng file trong blog đang chọn.
+	purgeInput := allActive
+	if bs != nil {
+		sc, _ := json.Marshal(map[string]any{"include": bs.Path, "exclude": bs.exclude})
+		purgeInput = append([]string{"#scope " + string(sc)}, allActive...)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	start := time.Now()
-	fmt.Printf("update -all %s: %d URL trong DB, %d đích (%s), lô %d\n", cfg.Origin.Host, len(paths), len(clients), targetsDesc(cfg.Targets), *batch)
+	fmt.Printf("update -all %s (%s): %d URL trong DB, %d đích (%s), lô %d\n", cfg.Origin.Host, bs, len(paths), len(clients), targetsDesc(cfg.Targets), *batch)
 
 	// ---- 1. Kiểm kê ----
 	t := time.Now()
@@ -166,8 +168,11 @@ func cmdRegenAll(args []string) {
 					dir, file = "/"+rel[:j+1], rel[j+1:]
 				}
 				dir = kv.Key(dir)
+				if !bs.In(dir) {
+					return // ngoài blog đang chọn: không đụng
+				}
 				switch {
-				case !keep[dir]:
+				case !keepAll[dir]:
 					in.orphan++ // mồ côi (mọi loại file)
 					in.orphanDirs[dir] = true
 					if *keepOrphans {
@@ -225,7 +230,7 @@ func cmdRegenAll(args []string) {
 			die("list KV: %v", err)
 		}
 		for _, k := range ks {
-			if !keep[k] {
+			if bs.In(k) && !keepAll[k] {
 				kvOrphans = append(kvOrphans, k)
 			}
 		}
@@ -233,7 +238,7 @@ func cmdRegenAll(args []string) {
 		fmt.Printf("[1] KV: %d key, mồ côi %d %s\n", len(ks), len(kvOrphans), sample(kvOrphans))
 		maxOrphans = max(maxOrphans, len(kvOrphans))
 	}
-	if _, _, err := runRemote(ctx, cfg.Renew.SSHHost, cfg.Renew.Command+" --purge-cache --dry-run", "purge", paths, nil); err != nil {
+	if _, _, err := runRemote(ctx, cfg.Renew.SSHHost, cfg.Renew.Command+" --purge-cache --dry-run", "purge", purgeInput, nil); err != nil {
 		die("kiểm kê server: %v", err)
 	}
 	fmt.Printf("[1] server (trước): %s  (%.1f s)\n", lastPurge, time.Since(t).Seconds())
@@ -287,7 +292,7 @@ func cmdRegenAll(args []string) {
 	if *keepOrphans {
 		pc += " --keep-orphans"
 	}
-	if _, _, err := runRemote(ctx, cfg.Renew.SSHHost, pc, "purge", paths, nil); err != nil {
+	if _, _, err := runRemote(ctx, cfg.Renew.SSHHost, pc, "purge", purgeInput, nil); err != nil {
 		die("dọn server: %v", err)
 	}
 	fmt.Printf("[3] dọn server: %s (%.1f s)\n", lastPurge, time.Since(t).Seconds())
@@ -328,12 +333,21 @@ func cmdRegenAll(args []string) {
 		got := map[string]bool{}
 		c.List(ctx, c.T.Prefix, func(o s3.ListResult) {
 			rel := "/" + strings.TrimPrefix(o.Key, c.T.Prefix)
+			dir := rel
+			if j := strings.LastIndex(rel, "/"); j >= 0 {
+				dir = rel[:j+1]
+			}
+			if !bs.In(dir) {
+				return // ngoài blog đang chọn
+			}
 			switch {
 			case !strings.HasSuffix(rel, "/index-https.html"):
 				other++
-			case keep[strings.TrimSuffix(rel, "index-https.html")]:
+			case keep[dir]:
 				have++
-				got[strings.TrimSuffix(rel, "index-https.html")] = true
+				got[dir] = true
+			case keepAll[dir]:
+				// URL active của blog khác nằm trong prefix (không xảy ra khi đã lọc bs.In)
 			default:
 				orphanHTML++
 			}
@@ -356,7 +370,7 @@ func cmdRegenAll(args []string) {
 		}
 		fmt.Println()
 	}
-	runRemote(ctx, cfg.Renew.SSHHost, cfg.Renew.Command+" --purge-cache --dry-run", "purge", paths, nil)
+	runRemote(ctx, cfg.Renew.SSHHost, cfg.Renew.Command+" --purge-cache --dry-run", "purge", purgeInput, nil)
 	fmt.Printf("[6] server (sau): %s (%.1f s)\n", lastPurge, time.Since(t).Seconds())
 
 	summary(all, time.Since(start), cfg.Targets)

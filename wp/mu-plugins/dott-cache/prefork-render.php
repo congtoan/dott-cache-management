@@ -94,8 +94,15 @@ function pf_result( array $r ) {
 $pf_skip  = 0;
 $pf_paths = array();
 $src      = '-' === $opt['urls'] ? 'php://stdin' : $opt['urls'];
+// Dòng "#scope {"include":"/en/","exclude":["/en/x/"]}" (do VPS phụ gửi khi lọc -blog): --purge-cache chỉ
+// đụng file có path bắt đầu bằng include và không thuộc exclude. Không có dòng này: mọi path.
+$pf_scope = null;
 foreach ( (array) @file( $src, FILE_IGNORE_NEW_LINES ) as $l ) {
 	$l = trim( (string) $l );
+	if ( 0 === strpos( $l, '#scope ' ) ) {
+		$pf_scope = json_decode( substr( $l, 7 ), true );
+		continue;
+	}
 	if ( '' === $l || '#' === $l[0] ) {
 		continue;
 	}
@@ -138,6 +145,20 @@ if ( isset( $opt['purge-cache'] ) ) {
 	$base = $pf_root . '/wp-content/cache/wp-rocket/' . $pf_host;
 	$all  = isset( $opt['all'] );
 	$dry  = isset( $opt['dry-run'] );
+	$in_scope = function ( $rel ) use ( $pf_scope ) {
+		if ( ! is_array( $pf_scope ) ) {
+			return true;
+		}
+		if ( 0 !== strpos( $rel, strtolower( (string) ( $pf_scope['include'] ?? '/' ) ) ) ) {
+			return false;
+		}
+		foreach ( (array) ( $pf_scope['exclude'] ?? array() ) as $e ) {
+			if ( '' !== $e && 0 === strpos( $rel, strtolower( $e ) ) ) {
+				return false;
+			}
+		}
+		return true;
+	};
 	$keep = array();
 	foreach ( $pf_paths as $p ) {
 		$keep[ strtolower( $p ) ] = true;
@@ -158,6 +179,9 @@ if ( isset( $opt['purge-cache'] ) ) {
 				continue;
 			}
 			$rel = strtolower( substr( $f->getPath(), strlen( $base ) ) . '/' );
+			if ( ! $in_scope( $rel ) ) {
+				continue; // ngoài blog đang chọn: không đụng
+			}
 			if ( $all ) {
 				$why = 'xóa_all';
 			} elseif ( '.mobile-active' === $name || false !== strpos( $name, 'mobile' ) ) {
@@ -185,9 +209,10 @@ if ( isset( $opt['purge-cache'] ) ) {
 			}
 		}
 	}
-	$missing = $all ? 0 : count( array_diff_key( $keep, $have_html ) );
+	$keep_in = array_filter( $keep, $in_scope, ARRAY_FILTER_USE_KEY );
+	$missing = $all ? 0 : count( array_diff_key( $keep_in, $have_html ) );
 	pf_line( sprintf( '# %s %s trong %.1f s', $dry ? 'đếm (dry-run)' : 'dọn', $base, microtime( true ) - $t0 ) );
-	pf_line( 'PURGE ' . json_encode( $c + array( 'path_giữ' => count( $keep ), 'path_giữ_chưa_có_html' => $missing, 'path_mồ_côi' => count( $orphan_dirs ), 'dry_run' => $dry ), JSON_UNESCAPED_UNICODE ) );
+	pf_line( 'PURGE ' . json_encode( $c + array( 'path_giữ' => count( $keep_in ), 'path_giữ_chưa_có_html' => $missing, 'path_mồ_côi' => count( $orphan_dirs ), 'dry_run' => $dry ), JSON_UNESCAPED_UNICODE ) );
 	@rmdir( $pf_tmp );
 	pf_line( "DONE ok=0 fail=0 skip=$pf_skip" );
 	exit( 0 );

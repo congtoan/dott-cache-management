@@ -29,7 +29,6 @@ package main
 //  4. Upload index-https.html lên mọi đích; thêm key KV còn thiếu.
 
 import (
-	"bufio"
 	"context"
 	"database/sql"
 	"flag"
@@ -78,18 +77,17 @@ func cmdUpdate(args []string) {
 	fs := flag.NewFlagSet("update", flag.ExitOnError)
 	site := fs.String("site", "", "domain")
 	cfgPath := fs.String("config", "", "file cấu hình JSON")
-	one := fs.String("url", "", "một URL")
-	urls := fs.String("urls", "", "danh sách URL cách nhau dấu phẩy; không có giá trị thì hỏi")
-	txt := fs.String("txt", "", "file danh sách URL; không có giá trị thì dùng lists/<domain>/update.txt")
-	seg := fs.String("segment", "", "link archive cách nhau dấu phẩy; không có giá trị thì hỏi")
-	segMode := fs.String("segment-mode", "all", "all (archive + phân trang + bài) | archive (archive + phân trang) | posts (chỉ bài)")
+	sf := addScopeFlags(fs)
 	mode := fs.String("mode", "auto", "auto | http | prefork")
 	httpMax := fs.Int("http-max", 4, "-mode auto: tối đa N URL thì dùng http")
 	batch := fs.Int("batch", 200, "số URL mỗi lô prefork")
 	yes := fs.Bool("yes", false, "không hỏi xác nhận")
 	logPath := fs.String("log", "", "ghi kết quả từng URL ra JSONL")
 	fs.Parse(args)
-	if *one == "" && *urls == "" && *txt == "" && *seg == "" {
+	if !sf.any() {
+		if *sf.blog != "" {
+			die("-blog chỉ lọc phạm vi: dùng kèm -all, -url, -urls, -txt hoặc -segment")
+		}
 		usage()
 	}
 
@@ -100,134 +98,19 @@ func cmdUpdate(args []string) {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	in := bufio.NewReader(os.Stdin)
-	ask := func(q string) string {
-		fmt.Print(q)
-		l, _ := in.ReadString('\n')
-		return strings.TrimSpace(l)
-	}
-
-	// ---- Gom danh sách ----
-	seen := map[string]bool{}
-	var paths []string
-	add := func(raw string, src string) {
-		raw = strings.TrimSpace(raw)
-		if raw == "" || strings.HasPrefix(raw, "#") {
-			return
-		}
-		if err := checkLine(raw, cfg.Origin.Host); err != nil {
-			fmt.Printf("  bỏ %q (%s): %v\n", raw, src, err)
-			return
-		}
-		p := normPath(raw)
-		if !seen[p] {
-			seen[p] = true
-			paths = append(paths, p)
-		}
-	}
-	split := func(s string) []string {
-		return strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\t' })
-	}
-	if *one != "" {
-		add(*one, "-url")
-	}
-	if *urls != "" {
-		v := *urls
-		if v == askValue {
-			v = ask("Nhập URL cần cập nhật, cách nhau dấu phẩy: ")
-		}
-		for _, u := range split(v) {
-			add(u, "-urls")
-		}
-	}
-	if *txt != "" {
-		f := *txt
-		if f == askValue {
-			f = defaultListFile(cfg, *site)
-		}
-		n0 := len(paths)
-		for _, p := range readPaths(f, 0, cfg.Origin.Host) {
-			add(p, f)
-		}
-		fmt.Printf("đọc %s: %d URL\n", f, len(paths)-n0)
-	}
 	db, err := store.Open(siteData(*site, cfg))
 	if err != nil {
 		die("%v", err)
 	}
 	defer db.Close()
-	if *seg != "" {
-		v := *seg
-		if v == askValue {
-			v = ask("Nhập link archive (category, tag, trang chủ...), cách nhau dấu phẩy: ")
-		}
-		for _, p := range expandSegment(ctx, cfg, db, split(v), *segMode) {
-			add(p, "-segment")
-		}
-	}
+	bs := loadBlogScope(db, *sf.blog)
+	paths := gatherPaths(ctx, cfg, db, *site, sf, bs)
 	if len(paths) == 0 {
 		die("không có URL nào")
 	}
 
 	// ---- 1. Thứ tự ưu tiên theo DB ----
-	type info struct {
-		rank, page, blog, trank int
-		inDB                    bool
-	}
-	meta := map[string]info{}
-	rows, _ := db.Query(`SELECT path, kind, page, blog_id, obj_type FROM urls WHERE status='active'`)
-	for rows.Next() {
-		var p, k, t string
-		var pg, b int
-		rows.Scan(&p, &k, &pg, &b, &t)
-		if !seen[p] {
-			continue
-		}
-		r := 2
-		switch {
-		case k == "home":
-			r = 0
-		case k == "single":
-			r = 1
-		case pg > 1:
-			r = 3
-		}
-		tr := 2
-		if t == "category" {
-			tr = 0
-		} else if t == "post_tag" {
-			tr = 1
-		}
-		meta[p] = info{r, pg, b, tr, true}
-	}
-	rows.Close()
-	var notInDB []string
-	for _, p := range paths {
-		if !meta[p].inDB {
-			notInDB = append(notInDB, p)
-			meta[p] = info{rank: 1, page: 1}
-		}
-	}
-	sort.SliceStable(paths, func(i, j int) bool {
-		a, b := meta[paths[i]], meta[paths[j]]
-		if a.rank != b.rank {
-			return a.rank < b.rank
-		}
-		if a.page != b.page {
-			return a.page < b.page
-		}
-		if a.blog != b.blog {
-			return a.blog < b.blog
-		}
-		if a.trank != b.trank {
-			return a.trank < b.trank
-		}
-		return paths[i] < paths[j]
-	})
-	cnt := [4]int{}
-	for _, p := range paths {
-		cnt[meta[p].rank]++
-	}
+	paths, cnt, notInDB := orderPaths(db, paths)
 	m := *mode
 	if m == "auto" {
 		m = "prefork"
@@ -235,14 +118,14 @@ func cmdUpdate(args []string) {
 			m = "http"
 		}
 	}
-	fmt.Printf("update %s: %d URL (trang chủ %d, bài %d, archive trang 1 %d, phân trang %d), mode %s, %d đích\n",
-		cfg.Origin.Host, len(paths), cnt[0], cnt[1], cnt[2], cnt[3], m, len(clients))
+	fmt.Printf("update %s (%s): %d URL (trang chủ %d, bài %d, archive trang 1 %d, phân trang %d), mode %s, %d đích\n",
+		cfg.Origin.Host, bs, len(paths), cnt[0], cnt[1], cnt[2], cnt[3], m, len(clients))
 	if len(notInDB) > 0 {
 		fmt.Printf("  cảnh báo: %d URL không có trong DB (chưa urls sync, hoặc bị loại theo config): %s\n", len(notInDB), sample(notInDB))
 	}
 	fmt.Printf("  %s\n", sample(paths))
 	if fi, _ := os.Stdin.Stat(); !*yes && fi.Mode()&os.ModeCharDevice != 0 {
-		if a := strings.ToLower(ask("Tiếp tục? [y/N] ")); a != "y" && a != "yes" {
+		if a := strings.ToLower(askLine("Tiếp tục? [y/N] ")); a != "y" && a != "yes" {
 			fmt.Println("đã hủy")
 			return
 		}
@@ -302,6 +185,75 @@ func cmdUpdate(args []string) {
 	if len(bad) > 0 {
 		os.Exit(1)
 	}
+}
+
+// orderPaths: sắp theo thứ tự ưu tiên (trang chủ, bài → archive trang 1 → phân trang) dựa trên DB.
+// Trả về: danh sách đã sắp, số URL mỗi nhóm, các URL không có trong DB (coi như bài đơn).
+func orderPaths(db *sql.DB, paths []string) ([]string, [4]int, []string) {
+	type info struct {
+		rank, page, blog, trank int
+		inDB                    bool
+	}
+	want := map[string]bool{}
+	for _, p := range paths {
+		want[p] = true
+	}
+	meta := map[string]info{}
+	rows, _ := db.Query(`SELECT path, kind, page, blog_id, obj_type FROM urls WHERE status='active'`)
+	for rows.Next() {
+		var p, k, t string
+		var pg, b int
+		rows.Scan(&p, &k, &pg, &b, &t)
+		if !want[p] {
+			continue
+		}
+		r := 2
+		switch {
+		case k == "home":
+			r = 0
+		case k == "single":
+			r = 1
+		case pg > 1:
+			r = 3
+		}
+		tr := 2
+		if t == "category" {
+			tr = 0
+		} else if t == "post_tag" {
+			tr = 1
+		}
+		meta[p] = info{r, pg, b, tr, true}
+	}
+	rows.Close()
+	var notInDB []string
+	for _, p := range paths {
+		if !meta[p].inDB {
+			notInDB = append(notInDB, p)
+			meta[p] = info{rank: 1, page: 1}
+		}
+	}
+	out := append([]string{}, paths...)
+	sort.SliceStable(out, func(i, j int) bool {
+		a, b := meta[out[i]], meta[out[j]]
+		if a.rank != b.rank {
+			return a.rank < b.rank
+		}
+		if a.page != b.page {
+			return a.page < b.page
+		}
+		if a.blog != b.blog {
+			return a.blog < b.blog
+		}
+		if a.trank != b.trank {
+			return a.trank < b.trank
+		}
+		return out[i] < out[j]
+	})
+	var cnt [4]int
+	for _, p := range out {
+		cnt[meta[p].rank]++
+	}
+	return out, cnt, notInDB
 }
 
 func firstNonEmpty(a, b string) string {

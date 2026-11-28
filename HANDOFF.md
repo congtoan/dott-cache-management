@@ -120,6 +120,12 @@ Header S3 phải giữ khi upload: `ContentType: text/html`, `CacheControl: publ
   - Thêm `urls list` để lọc DB rồi xuất txt.
   - Điều tiết theo load đã có (Go trước mỗi lô, PHP trong lô). Trên php81: 276 s, load tối đa 2,41 (khi không điều tiết: 3,54). Mức `max_load` cho production chờ chủ site chọn.
 
+- **`-blog` và `replace` (28/11):**
+  - `update` và `replace` đều lọc được theo subsite (`-blog /`, `-blog /en/`).
+  - `dott-cache replace -content|-version` sửa file cache ngay trên VPS chính (`replace-cache.php` trong site), tạo lại `_gzip`, rồi upload các trang đã đổi lên S3 sau khi kiểm tra nội dung. Luôn chạy thử trước.
+  - Đã test trên php81.
+  - `max_load` giữ 1,5 (chủ site chốt).
+
 ## 5. Việc tiếp theo (chủ site chọn)
 1. **Service `dott-cache` có hàng đợi** (SQLite, nhận sự kiện từ mu-plugin trên php81, render bằng HTTP hoặc prefork, upload nhiều đích), test trên php81 với bucket test.
 2. Đo prefork trên production (chỉ đọc, không ghi cache), khi chủ site cho phép.

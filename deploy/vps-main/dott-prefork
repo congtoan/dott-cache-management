@@ -30,12 +30,26 @@ for a in "$@"; do
   case "$a" in
     --no-delete|--delete-only|--purge-cache|--all|--dry-run|--keep-orphans) extra+=("$a") ;;
     --export-urls) export_urls=1 ;;
+    --replace) ;; # xử lý ở dưới
     --since=[0-9]*) [[ "$a" =~ ^--since=[0-9]+$ ]] && extra+=("$a") ;;
     --terms=*) [[ "$a" =~ ^--terms=[0-9]+:[a-z0-9_-]+:[0-9]+(,[0-9]+:[a-z0-9_-]+:[0-9]+)*$ ]] && extra+=("$a") ;;
     --max-load=*|--resume-load=*) [[ "$a" =~ ^--(max|resume)-load=[0-9]+(\.[0-9]+)?$ ]] && extra+=("$a") ;;
     --loadavg) echo "LOAD $(cut -d' ' -f1 /proc/loadavg) $(nproc)"; exit 0 ;;
     *) echo "# bỏ qua tham số không được phép: $a" ;;
   esac
+done
+
+# --replace: sửa nội dung / version trong file cache (replace-cache.php), không nạp WordPress.
+# Job (JSON) và danh sách path đi qua stdin, nên chuỗi tìm/thay không bao giờ đi qua shell.
+for a in "$@"; do
+  if [ "$a" = "--replace" ]; then
+    script="$root/wp-content/mu-plugins/dott-cache/replace-cache.php"
+    [ -f "$script" ] || { echo "# thiếu $script"; echo "DONE ok=0 fail=0 skip=0"; exit 2; }
+    exec 9>/run/dott-prefork.lock
+    flock -w 900 9 || { echo "# đang có lô khác chạy quá 15 phút, bỏ"; echo "DONE ok=0 fail=0 skip=0"; exit 3; }
+    nice -n 10 ionice -c2 -n7 runuser -u "$user" -- php "$script" --root="$root" --host="$site" 2>&1
+    exit 0
+  fi
 done
 
 # --export-urls: in danh sách URL của site (export-urls.php), chỉ đọc DB.

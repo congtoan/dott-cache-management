@@ -467,5 +467,32 @@ Mục đích: mô phỏng diaocthongthai.com để test tt-core, cache một b�
   - **Nhận xét:** một tiến trình prefork tự nó đã chiếm load khoảng 1 trên máy 1 vCPU. Phần vượt quá đến từ hoạt động khác (production, PHP-FPM). Load 1 phút phản ứng chậm, nên vẫn có những đợt vượt ngắn.
   - Muốn chặt hơn thì giảm `max_load` (ví dụ 1,3) và kiểm tra mỗi URL thay vì mỗi 5 URL; đổi lại thời gian chạy sẽ dài hơn. **Chủ site chọn mức trước khi chạy production.**
 
+### Lọc theo subsite (`-blog`) và lệnh `replace` (28/11, chủ site đồng ý 6 điểm)
+- **`-blog`** (path `"/"`, `"/en/"` hoặc blog_id) dùng được cho mọi phạm vi của `update` và `replace`, kể cả `-all`.
+  - Path thuộc blog `/` khi không thuộc blog nào có path dài hơn (với php81, `/` không gồm `/en/`, `/tttest/`, `/tttest-en/`).
+  - Map blog → path do `urls sync` lưu ở meta `blog_paths`.
+  - Với `update -all -blog`: mồ côi vẫn so với URL active của **mọi** blog. S3, KV và server (dòng `#scope` gửi kèm cho PHP) chỉ đụng tới phạm vi blog đã chọn.
+  - Test: danh sách trộn 2 blog thì bỏ đúng 1 URL ngoài blog. `update -all -blog /tttest-en/` chạy 222/222 trong 36,7 s; kiểm kê và dọn chỉ tính 222 path của blog này.
+- **`dott-cache replace`** thay `replace_cache_content*.py` và `replace_cache_update_version*.py`:
+  - `-content -search … -replace … [-regex]`
+  - `-version [-files …]`, mặc định `style.css` và `tt-core/core.js` của `generatepress_child` và `generatepress_en`. Version của `core.js` lấy từ `tt-core/core.manifest.json` (hash), file khác lấy theo `filemtime`. Khớp `/themes/<file>?ver=` bất kể tiền tố blog.
+  - Phạm vi giống `update`.
+  - Phần sửa file nằm ở `wp/mu-plugins/dott-cache/replace-cache.php`, gọi qua `dott-prefork <domain> --replace`. Job JSON và danh sách path đi qua stdin, không qua shell.
+  - Ghi HTML mới, **tạo lại `_gzip` từ HTML mới**, cả hai đều ghi file tạm rồi rename.
+  - Luôn chạy thử trước (đếm, in ví dụ trước/sau); ghi thật cần `-yes` hoặc trả lời `y`.
+  - Sau khi sửa: lấy lại các trang đã đổi qua HTTP, **kiểm tra nội dung** (content: không còn chuỗi cũ, có chuỗi mới; version: có ít nhất một `?ver=` mới), rồi upload ghi đè lên mọi đích. KV không đổi.
+  - Lỗi của tool cũ đã sửa: `replace_cache_content.py` chỉ quét **một cấp thư mục** (`os.scandir`), nên bỏ sót `/category/x/`, `/category/x/page/N/` và `/en/...`.
+- **Test trên php81:**
+
+| Test | Kết quả |
+|---|---|
+| `-version -all`, chạy thử | 0 file cần đổi: version trong HTML khớp `filemtime` và manifest |
+| `touch` `generatepress_en/style.css` rồi `-version -all -blog /tttest-en/ -yes` | 222 trang (444 chỗ thay), sửa trên đĩa 0,6 s, upload 222/222 trong 10,8 s, tổng 11,7 s. S3 và `_gzip` trên server có `?ver=` mới; blog vi giữ nguyên |
+| `-content` thêm dấu test trước `</body>` trên `-segment … -segment-mode archive` | 2/2 trang, S3 có dấu test |
+| `-content` xóa dấu test, `-all` | 2/2 trang, S3 sạch |
+
+  - Chạy thử ban đầu mất 60 s cho 1.448 file, vì cũng nghỉ chờ load như khi ghi. Đã bỏ điều tiết cho chạy thử: còn 0,4 s.
+- **Lỗi của Claude, đã sửa trước khi commit:** `urls sync` bị treo (deadlock), vì đọc meta bằng `db` trong lúc transaction đang giữ kết nối duy nhất (`SetMaxOpenConns(1)`). Đã chuyển phần đọc ra trước `Begin()`.
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.

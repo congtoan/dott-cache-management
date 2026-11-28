@@ -114,6 +114,8 @@ func main() {
 		cmdKV(os.Args[2:])
 	case "update":
 		cmdUpdate(os.Args[2:])
+	case "replace":
+		cmdReplace(os.Args[2:])
 	case "regen-all": // tên cũ của "update -all"
 		cmdRegenAll(os.Args[2:])
 	default:
@@ -128,6 +130,11 @@ func usage() {
   dott-cache update -site <domain> -url URL | -urls [a,b,...] | -txt [file] | -segment [link,...] [-segment-mode all|archive|posts]
                     [-mode auto|http|prefork] [-http-max 4] [-batch 200] [-yes]
       -urls / -segment không có giá trị: hỏi nhập; -txt không có giá trị: lists/<domain>/update.txt
+      -blog "/" | "/en/" | blog_id: chỉ một subsite (dùng được với mọi phạm vi, kể cả -all)
+  SỬA NHANH FILE CACHE (không render lại; server + S3):
+  dott-cache replace -site <domain> -content -search "cũ" -replace "mới" [-regex] <phạm vi> [-yes]
+  dott-cache replace -site <domain> -version [-files generatepress_child/style.css,...] <phạm vi> [-yes]
+      phạm vi như update (-all | -url | -urls | -txt | -segment, kèm -blog). Không có -yes: chỉ chạy thử
   DANH SÁCH URL:
   dott-cache urls list -site <domain> [-kind ..] [-type ..] [-blog N] [-match REGEX] [-page-max N]
                     [-modified-after YYYY-MM-DD] [-modified-before ..] [-limit N] [-out file.txt]

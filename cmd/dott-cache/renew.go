@@ -216,10 +216,23 @@ func runRemote(ctx context.Context, host, command, stage string, paths []string,
 			}
 		case strings.HasPrefix(l, "THROTTLE "):
 			addThrottle(l[9:])
+		case strings.HasPrefix(l, "REPLACE "):
+			lastReplace = l[8:]
+		case strings.HasPrefix(l, "SAMPLE "):
+			var s struct {
+				Path, Before, After string
+				N                   int
+			}
+			if json.Unmarshal([]byte(l[7:]), &s) == nil {
+				fmt.Printf("    ví dụ %s (%d chỗ):\n      trước: %s\n      sau:   %s\n", s.Path, s.N, oneLine(s.Before), oneLine(s.After))
+			}
 		case strings.HasPrefix(l, "PURGE "):
 			lastPurgeRaw = l[6:]
 			lastPurge = purgeSummary(l[6:])
 		default:
+			if strings.HasPrefix(l, "# ") {
+				remoteLogs = append(remoteLogs, l[2:])
+			}
 			if !quietRemote || !strings.HasPrefix(l, "# ") {
 				fmt.Println("    " + strings.TrimPrefix(l, "# "))
 			}
@@ -230,6 +243,10 @@ func runRemote(ctx context.Context, host, command, stage string, paths []string,
 		return ok, failed, fmt.Errorf("lệnh trên VPS chính dừng giữa chừng (%v)", werr)
 	}
 	return ok, failed, nil
+}
+
+func oneLine(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // retryableByHTTP: lỗi prefork nào đáng thử lại bằng HTTP. 404 và path sai thì HTTP cũng không cứu được.

@@ -276,6 +276,16 @@ func cmdURLSync(args []string) {
 		return
 	}
 
+	// Map blog_id → path blog (vd 2 → "/en/"), dùng cho lọc "-blog". Gộp với map đã có.
+	// Đọc TRƯỚC khi mở transaction: DB chỉ có 1 kết nối, đọc bằng db trong lúc tx giữ kết nối sẽ treo.
+	bps := map[string]string{}
+	json.Unmarshal([]byte(store.Meta(db, "blog_paths")), &bps)
+	for _, u := range urls {
+		if u.BP != "" {
+			bps[strconv.Itoa(u.B)] = u.BP
+		}
+	}
+
 	// 4. Ghi trong một transaction.
 	now := started.Unix()
 	tx, err := db.Begin()
@@ -310,6 +320,9 @@ func cmdURLSync(args []string) {
 			tx.Rollback()
 			die("%v", err)
 		}
+	}
+	if b, err := json.Marshal(bps); err == nil {
+		store.SetMeta(tx, "blog_paths", string(b))
 	}
 	kind := "urls-full"
 	if !full {

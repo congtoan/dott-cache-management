@@ -30,6 +30,12 @@ type Config struct {
 	// renew đặt bằng thời điểm bắt đầu: nginx bật open_file_cache nên sau khi file bị xóa/thay,
 	// nginx có thể vẫn trả bản CŨ tới 120 s (đo 28/11). Không kiểm thì sẽ upload bản cũ lên S3.
 	MinCachedAt int64 `json:"-"`
+
+	// MustContain / MustNotContain (không đọc từ JSON): kiểm tra nội dung sau khi "replace" sửa file trên
+	// đĩa, trước khi upload. Chưa đúng thì thử lại (như bản cũ), hết lượt thì báo lỗi, không upload.
+	MustContain    []string `json:"-"`
+	MustNotContain []string `json:"-"`
+	MustContainAny []string `json:"-"` // phải có ít nhất một chuỗi
 }
 
 // Fetcher giữ một http.Client keep-alive tới origin.
@@ -111,6 +117,13 @@ func (f *Fetcher) Get(ctx context.Context, path string) (*Doc, error) {
 				time.Sleep(time.Duration(500*(attempt+1)) * time.Millisecond)
 				continue
 			}
+			if why := contentCheck(body, f.cfg.MustContain, f.cfg.MustNotContain, f.cfg.MustContainAny); why != "" {
+				if attempt < 2 {
+					time.Sleep(time.Duration(500*(attempt+1)) * time.Millisecond)
+					continue
+				}
+				return nil, fmt.Errorf("%s: nội dung chưa đúng sau khi sửa: %s", path, why)
+			}
 			d.Body, d.Served, d.CachedAt = body, served, at
 			d.Duration = time.Since(start)
 			if err := validate(body); err != nil {
@@ -149,6 +162,32 @@ func (f *Fetcher) get(ctx context.Context, path string) ([]byte, string, error) 
 		return nil, "", fmt.Errorf("%s: có Content-Encoding %q (cần bản .html thô)", path, ce)
 	}
 	return body, resp.Header.Get("X-Rocket-Nginx-Serving-Static"), nil
+}
+
+func contentCheck(b []byte, must, mustNot, anyOf []string) string {
+	if len(anyOf) > 0 {
+		found := false
+		for _, s := range anyOf {
+			if bytes.Contains(b, []byte(s)) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Sprintf("không có chuỗi nào trong %q", anyOf)
+		}
+	}
+	for _, s := range must {
+		if !bytes.Contains(b, []byte(s)) {
+			return fmt.Sprintf("thiếu %q", s)
+		}
+	}
+	for _, s := range mustNot {
+		if bytes.Contains(b, []byte(s)) {
+			return fmt.Sprintf("vẫn còn %q", s)
+		}
+	}
+	return ""
 }
 
 func validate(b []byte) error {
