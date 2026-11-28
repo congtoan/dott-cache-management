@@ -572,5 +572,15 @@ Mục đích: mô phỏng diaocthongthai.com để test tt-core, cache một b�
   - Lỗi AdSense (`No slot size for availableWidth=0`) cũng có ở bài chưa bị đụng tới, nên không liên quan cache.
 - **Đúng như dự đoán, cần lưu ý:** theme production chưa có tt-core, nên khách mobile của 8 bài này nhận **JS bản desktop** (`thongthai-script.js`, `lss-1.js`) thay vì `thongthai-script-mobile.js`. Đây là lý do P2 (tt-core) và P3 (sticky 3.2.0) phải làm trước P4 và P6. **Khôi phục cách tách mobile cho 8 bài:** chạy `dott-prefork --delete-only` cho 8 path, khách truy cập sẽ tạo lại bản desktop, bản mobile và `.mobile-active` qua PHP.
 
+### Cài mu-plugin `dott-single-cache` 1.1.0 trên production, bật cho blog 1 (28/11 13:17, chủ site yêu cầu)
+- Cài `wp-content/mu-plugins/dott-single-cache.php` với `DOTT_SINGLE_CACHE_BLOGS = array( 1 )`. File mới, không có bản cũ để backup; muốn gỡ thì xóa file.
+- Sau khi cài:
+  - `/`, `/en/`, bài test đều 200; `wp-login.php` 302;
+  - option khi đọc ra: blog 1 `do_caching_mobile_files=0`, blog 2 `=1`;
+  - không có lỗi PHP mới.
+- **Chưa tạo lại `wp-rocket-config/diaocthongthai.com.php`** (vẫn `$rocket_do_caching_mobile_files = 1`, ngày 09/03). `advanced-cache.php` và `Buffer\Cache` đọc file này, nên cách phục vụ cache **chưa đổi**. File sẽ được tạo lại khi lưu thiết lập WP Rocket của site vi, hoặc chủ động ở bước P4 (sau P2/P3).
+- **Cảnh báo:** nếu ai lưu thiết lập WP Rocket của site vi trước khi có tt-core, khách mobile của toàn site vi sẽ bắt đầu nhận bản desktop.
+- **Vì sao 8 bài test không sinh lại bản mobile khi chưa có mu-plugin:** thư mục không còn `.mobile-active`, nên rocket-nginx trả thẳng `index-https.html` cho mọi khách, kể cả mobile. Request không tới PHP, nên WP Rocket không ghi bản mobile. Log 13:04–13:11 có request iPhone và Android vào các bài này, và thư mục vẫn chỉ có 2 file. Trạng thái này sẽ mất nếu một request mobile lọt vào PHP (file bị xóa, request có cookie hoặc query string). Mu-plugin, khi file config đã được tạo lại, là thứ giữ cho bền.
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.

@@ -27,7 +27,10 @@ Cloudflare Worker phục vụ HTML từ S3 cho khách ở xa, khách gần đi t
 
 Repo **private**. Trên PC, nhánh `v2` là git worktree tại `D:\Claude\2026-11-27 Cache System v2`, còn `main` ở `D:\Claude\2026-11-25 Cache Management`.
 
-## Trạng thái (2026-11-28)
+## Trạng thái
+Trạng thái mới nhất và các bước tiếp theo: **[HANDOFF.md](HANDOFF.md) mục 3–4**. Bảng dưới đây ghi ngày 28/11 sáng.
+
+### 2026-11-28 sáng
 - Thiết kế, đo đạc và **prototype** đã xong:
   - Go uploader;
   - prefork ghi cache;

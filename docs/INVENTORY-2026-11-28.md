@@ -1,5 +1,7 @@
 # Kiểm kê Cache System v2 trước khi lên production (28/11/2026)
 
+> **Trạng thái production mới nhất và các bước tiếp theo: [HANDOFF.md](../HANDOFF.md) mục 3–4.** Đã làm từ khi viết file này: P0, P1, test 8 bài, cài mu-plugin `dott-single-cache` bật cho blog 1 (file config WP Rocket chưa được tạo lại). Mục 3 và 4 dưới đây ghi lúc kiểm kê ban đầu; những điểm đã xong có ghi ở mục 4b.
+
 > Tag `v2-tools-2026-11-28` (commit `a31fd57`). Mọi thứ dưới đây đã test trên **php81.congtoan.net** với bucket test `congtoanphp` và KV test. **Production (diaocthongthai.com) chưa chuyển gì**, ngoài rocket-nginx và `open_file_cache off`.
 > Chi tiết từng bước: [rollout-log.md](rollout-log.md). Thiết kế: [design-server-only.md](design-server-only.md) (mục 11b là bố cục thư mục).
 
