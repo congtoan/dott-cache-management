@@ -7,39 +7,63 @@
     "workers": 2
   },
   "targets": [
-    {"id": "ord", "endpoint": "https://us-ord-1.linodeobjects.com", "region": "us-ord-1", "bucket": "cdn.diaocthongthai.com", "prefix": "_cache_html/", "workers": 8}
+    {
+      "id": "ord",
+      "endpoint": "https://us-ord-1.linodeobjects.com",
+      "region": "us-ord-1",
+      "bucket": "cdn.diaocthongthai.com",
+      "prefix": "_cache_html/",
+      "workers": 8
+    }
   ],
   "s3_env": "/root/tool/cache-system/config/secrets/s3.env",
-  "renew": {"ssh_host": "main", "command": "/usr/local/sbin/dott-prefork diaocthongthai.com"},
-  "kv": {"namespace_id": "cc831ca12e954d0b8a875a3453abacc7"},
-  "throttle": {"max_load": 1.5, "resume_load": 1.0, "max_wait_sec": 300},
-  "write_blogs": ["/"],
+  "renew": {
+    "ssh_host": "main",
+    "command": "/usr/local/sbin/dott-prefork diaocthongthai.com"
+  },
+  "kv": {
+    "namespace_id": "cc831ca12e954d0b8a875a3453abacc7"
+  },
+  "throttle": {
+    "max_load": 1.5,
+    "resume_load": 1.0,
+    "max_wait_sec": 300
+  },
+  "write_blogs": [
+    "/",
+    "/en/"
+  ],
   "urls": {
-    "skip_blogs": ["/es/"],
+    "skip_blogs": [
+      "/es/"
+    ],
     "taxonomies": {
-      "/": ["category", "post_tag", "cdt", "khu-vuc", "san-pham"],
-      "/en/": ["category", "post_tag"]
+      "/": [
+        "category",
+        "post_tag",
+        "cdt",
+        "khu-vuc",
+        "san-pham"
+      ],
+      "/en/": [
+        "category",
+        "post_tag"
+      ]
     },
     "exclude": [
-      "^/danh-sach-xa-phuong-viet-nam/",
-      "^/danh-sach-phuong-xa-",
       "^/test-page/",
-      "^/danh-sach-quan-huyen-viet-nam/",
       "^/test2/",
       "^/huy-dang-ky-email/",
-      "^/danh-sach-xa-phuong-viet-nam-2025-new/",
       "^/en/test-post/",
-      "^/en/list-of-all-countries-in-the-world/",
-      "^/en/list-of-all-us-states/",
-      "^/en/list-of-all-us-counties/",
-      "^/en/list-of-all-us-cities-and-places/",
       "^/(en/)?checkout/",
       "/feed/",
       "sitemap",
       "^/wp-admin/",
       "^/wp-login"
     ],
-    "exclude_pagination": ["/ban-do-34-tinh-thanh-viet-nam-2025/"],
+    "exclude_pagination": [
+      "/ban-do-34-tinh-thanh-viet-nam-2025/"
+    ],
     "max_remove_pct": 2
   }
 }

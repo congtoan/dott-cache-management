@@ -811,5 +811,13 @@ Dữ liệu test để lại trên php81: excerpt của bài 150 có chữ "t0�
   - **Render 75 trang vi còn thiếu** (`update -txt lists/diaocthongthai.com/vi-missing-pages-2026-11-28.txt -blog / -yes`): 75/75 ok, 58 s, KV +75. `/tu-lieu/page/67/`, `/ban-tin/page/10/`: nginx HIT, S3 200.
 - **Chạy thật en** từ 20:57: `systemd-run --unit=dott-update-en --collect` (MemoryMax 400M, Nice 10, CPUQuota 50%), log `logs/diaocthongthai.com/update-all-en-20261128-2057.txt`, 197 lô. Xem tiến độ: `bash test/en-status.sh` (VPS phụ). Kết quả: xem mục sau khi chạy xong.
 
+### Bỏ exclude 8 trang danh sách (28/11 21:54–22:00, chủ site yêu cầu)
+- Chủ site bỏ các mục sau khỏi `cache_reject_uri` của WP Rocket (lưu thiết lập 21:54 vi, 21:56 en): `/danh-sach-xa-phuong-viet-nam/`, `/danh-sach-xa-phuong-viet-nam-2025-new/`, `/danh-sach-phuong-xa-(.*)/`, `/danh-sach-quan-huyen-viet-nam/`, `/en/list-of-all-countries-in-the-world/`, `/en/list-of-all-us-states/`, `/en/list-of-all-us-counties/`, `/en/list-of-all-us-cities-and-places/`.
+- Kiểm tra sau khi lưu: 2 file `wp-rocket-config` vẫn `cache_mobile = 1`, `do_caching_mobile_files = 0`; file vi chỉ đổi dòng `cache_reject_uri`.
+- Config VPS phụ (backup `.bak-2026-11-28-2200`): bỏ 8 mục tương ứng trong `urls.exclude`; bản trong repo `deploy/config/sites/` đồng bộ theo (gồm cả `write_blogs: ["/", "/en/"]`).
+- Export (chỉ đọc): 70 URL (7 trang trên + 63 `/danh-sach-phuong-xa-<tỉnh>/`), danh sách `lists/diaocthongthai.com/unexcluded-2026-11-28.txt`. Đo render (có query string): 0,2–1,7 s; lớn nhất `/danh-sach-xa-phuong-viet-nam/` 4,7 MB (10.037 `<tr>`), `-2025-new` 3,3 MB; dưới giới hạn 8 MB của bước lấy HTML.
+- Pool production chưa bật và `dott-update-en` giữ khóa site, nên tạo unit `dott-after-en` (22:00): chờ `dott-update-en` dừng, rồi `urls sync`, `update -txt unexcluded-vi.txt -blog /` và `unexcluded-en.txt -blog /en/`. Script `test/after-en.sh`, log `logs/diaocthongthai.com/after-en-20261128.txt`.
+- Cần xem khi en xong: `/en/test-cache/` có trong `cache_reject_uri` của en nhưng nằm trong DB, nên có thể là URL lỗi (không có `cached@`).
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.
