@@ -49,6 +49,7 @@ internal/s3/            ← Go: S3 SigV4, chỉ dùng stdlib, pool nhiều đíc
 internal/store/         ← Go: SQLite (modernc.org/sqlite) data/<domain>/state.db
 internal/kv/            ← Go: Cloudflare KV REST (bulk put/delete, list kiểm tra lại)
 deploy/config/sites/    ← mẫu config/sites/<domain>.json (không có bí mật)
+deploy/worker/          ← Cloudflare Worker v2 (một bản HTML, nhiều đích S3) + script deploy bản test
 go.mod
 wp/mu-plugins/          ← mu-plugin WordPress: dott-single-cache.php, dott-cache/prefork-render.php (prefork, nằm trong website); sắp có dott-cache.php (sự kiện + REST)
 deploy/nginx/           ← rocket-page-cache.conf (rocket-nginx)

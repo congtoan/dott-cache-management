@@ -29,6 +29,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/congtoan/dott-cache-management/internal/kv"
 	"github.com/congtoan/dott-cache-management/internal/origin"
 	"github.com/congtoan/dott-cache-management/internal/s3"
 )
@@ -88,6 +89,8 @@ func main() {
 		cmdURLs(os.Args[2:])
 	case "kv":
 		cmdKV(os.Args[2:])
+	case "regen-all":
+		cmdRegenAll(os.Args[2:])
 	default:
 		usage()
 	}
@@ -100,6 +103,7 @@ func usage() {
   dott-cache renew  -site <domain> (-url URL | -paths paths.txt) [-mode auto|http|prefork] [-http-max 4] [-limit N] [-keep-s3] [-no-delete] [-log out.jsonl]
   dott-cache urls sync -site <domain> [-since auto|8h|UNIX] [-from export.txt] [-dry-run] [-force-remove]
   dott-cache urls stats -site <domain>
+  dott-cache regen-all -site <domain> [-yes] [-batch 500] [-purge-all-first] [-delete-orphans]   (không có -yes: chỉ kiểm kê)
   dott-cache kv create -site <domain> -title <tên> | kv list -site <domain> [-prefix P] | kv sync -site <domain> [-dry-run] [-force-remove]
   -site <domain> dùng config/sites/<domain>.json; -config <file> thay cho -site. Không có -log thì ghi vào logs/<domain>/.`)
 	os.Exit(2)
@@ -209,8 +213,11 @@ func normPath(l string) string {
 }
 
 // keyFor: path "/en/about-us/" → "<prefix>en/about-us/index-https.html" (giống tool cũ).
+//
+// Path được chuẩn hóa giống Worker (kv.Key: viết thường, "/" cuối), vì Worker dựng URL S3 từ path đã
+// chuẩn hóa. Nếu path có chữ hoa mà key S3 giữ nguyên chữ hoa, Worker sẽ không tìm thấy object.
 func keyFor(prefix, path, file string) string {
-	return prefix + strings.TrimPrefix(path, "/") + file
+	return prefix + strings.TrimPrefix(kv.Key(path), "/") + file
 }
 
 type result struct {

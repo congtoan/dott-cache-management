@@ -341,5 +341,62 @@ Mục đích: mô phỏng diaocthongthai.com để test tt-core, cache một b�
     - `urls sync` đưa 5 URL quay lại: PUT lại 5 key.
   - **Còn thiếu:** `kv sync` chưa kiểm tra URL đã có trên S3 hay chưa (chưa có bảng `url_targets`), nên hiện chỉ dùng với namespace test.
 
+### Worker test cho php81 (28/11)
+- **Code:** `deploy/worker/dott-cache-worker.js`. Script deploy: `deploy/worker/deploy-test.sh` (Cloudflare API, token đọc từ `config/secrets/cf.env`).
+- **Deploy:** `dott-cache-php81-test.congtoan-real.workers.dev`, dùng KV test `php81-cache-test`. Chưa gắn route vào domain nào.
+- **Khác Worker v7:**
+  - chỉ một bản `index-https.html`, không còn bản mobile và `_gzip`;
+  - châu lục → bucket theo `TARGETS` (NA/SA → Chicago, EU → Frankfurt), châu lục khác vào origin;
+  - bỏ qua khi có cookie đăng nhập, bình luận hoặc giỏ hàng;
+  - bỏ qua cả `/<blog>/wp-admin/`, `/<blog>/wp-json/` của multisite (v7 chỉ khớp ở gốc site);
+  - có header `X-Dott-Cache` cho biết response đi đường nào;
+  - giả lập châu lục bằng `X-Dott-Continent`, chỉ có hiệu lực khi kèm `X-Dott-Test-Key` đúng secret (file `config/secrets/worker-test.env`).
+- **Kết quả test** (từ VPS phụ ở Singapore):
+
+| Trường hợp | Kết quả |
+|---|---|
+| Khách thật (AS) | `ORIGIN-region-AS` |
+| Giả lập NA, SA | `S3-NA` / `S3-SA` (lần đầu 1,6 s, các lần sau 0,09 s) |
+| Giả lập EU | `S3-EU` |
+| Giả lập OC | origin |
+| Sai key | không giả lập được |
+| Path không có trong KV | `ORIGIN-kv-miss` (404) |
+| Chữ hoa, thiếu `/` cuối | 301 về URL chuẩn |
+| Có cookie đăng nhập | `ORIGIN-cookie` |
+| Có query string | `ORIGIN-query` |
+| `wp-admin` | `ORIGIN-bypass` (sau khi sửa) |
+
+  - Nội dung qua Worker giống hệt object S3 (md5 khớp ở cả NA và EU).
+  - Cloudflare tự nén `br`.
+- **Đổi trong uploader:** key S3 được chuẩn hóa viết thường (`kv.Key`), vì Worker dựng URL S3 từ path đã chuẩn hóa. Trên php81 mọi path vốn đã viết thường, nên không có gì thay đổi.
+
+### `dott-cache regen-all`: tạo lại cache toàn site (28/11, php81)
+- **Các bước** (chi tiết ở đầu `cmd/dott-cache/regen.go`; không có `-yes` thì chỉ kiểm kê):
+  1. LIST S3 một lần trên mỗi đích và ghi manifest (`logs/<site>/regen-all-<thời gian>-s3-manifest-<đích>.txt`). Kiểm kê server bằng `dott-prefork --purge-cache --dry-run`.
+  2. Dọn server: xóa bản mobile, `.mobile-active`, file lạ, file trong thư mục mồ côi. Giữ bản desktop cho tới lúc prefork render URL đó.
+  3. Xóa trên S3 **một lần ngay từ đầu** (chủ site chốt) mọi file **không phải** `index-https.html`, chỉ những key đã có trong LIST, bằng DeleteObjects theo lô 1.000 key, 4 lô song song mỗi đích. `index-https.html` được giữ rồi **ghi đè** khi upload. `index-https.html` mồ côi chỉ được báo cáo, xóa khi có `-delete-orphans`.
+  4. Thứ tự (chủ site chốt): trang chủ và bài đơn → trang 1 của archive (category → tag → taxonomy khác, post type) → trang phân trang. Prefork theo lô 500 URL. Lô nào xong thì upload song song với lô tiếp theo. URL lỗi (không phải 404) thì thử lại bằng HTTP.
+  5. Kiểm tra lại: LIST S3 lần nữa và đếm file trên server.
+- **Chuẩn bị test:**
+  - Bỏ blog `/` và `/en/` của php81 (không bật WP Rocket) bằng `skip_blogs`. DB còn 1.448 URL.
+  - Tạo dữ liệu giả của hệ thống cũ:
+    - server: 30 URL có bản mobile, mobile `_gzip` và `.mobile-active`, cùng 1 thư mục mồ côi;
+    - S3: 40 URL có bản mobile, `_gzip`, mobile `_gzip` trên mỗi đích, cùng 1 html mồ côi.
+- **Kết quả:**
+
+| Bước | Kết quả |
+|---|---|
+| Kiểm kê | S3: 1.074 html giữ, 120 file kiểu cũ, 1 html mồ côi trên mỗi đích. Server: 1.072 html, 90 file mobile, 38 file mồ côi, 376 URL chưa có cache |
+| Dọn server | 0,4 s |
+| Xóa S3 | 120/120 object trên mỗi đích, 0,4–0,5 s |
+| Prefork | 3 lô: 42,5 s, 41,6 s, 34,1 s (11,8–13,2 URL/s), 0 lỗi, không URL nào phải thử lại bằng HTTP |
+| Upload | 1.448 × 2 đích, chạy song song với prefork (tổng 59 s) |
+| **Tổng** | **142 s cho 1.448 URL (10,2 URL/s), 1.448/1.448 ok** |
+| Kiểm tra lại | Mỗi đích có 1.448/1.448 `index-https.html`, file khác còn lại 0, html mồ côi 1 (giữ đúng như dự kiến). Server: 1.448 html và 1.448 gzip, 0 mobile, 0 mồ côi, 0 URL chưa có cache |
+| Qua Worker (NA) | 4 URL mẫu (trang chủ, bài, phân trang, en) có `cached@` trùng với origin |
+
+- **Load VPS chính:** tối đa 2,04, trung bình 1,43 (27 mẫu). Cao hơn lúc chỉ chạy prefork (0,92), vì có thêm request lấy HTML để upload. Trước khi chạy cho production cần **điều tiết theo load** (design mục 6), ví dụ nghỉ giữa các lô khi load > 1,5.
+- **Ước tính production** (chưa đo): 61.175 URL × khoảng 12 URL/s ≈ 85 phút, nếu tốc độ prefork giống php81.
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.

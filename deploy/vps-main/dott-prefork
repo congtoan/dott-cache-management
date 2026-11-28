@@ -2,6 +2,8 @@
 # dott-prefork: bộ chuyển lệnh của root trên VPS chính. Cài ở /usr/local/sbin/dott-prefork (root, 755).
 #
 #   printf '/tttest/abc/\n' | dott-prefork php81.congtoan.net [--no-delete | --delete-only]
+#   <danh sách path cần giữ> | dott-prefork <domain> --purge-cache [--all] [--dry-run]   (dọn cache cũ, mồ côi, mobile)
+#   dott-prefork <domain> --export-urls [--since=UNIX]                                  (danh sách URL)
 #
 # Bộ chuyển lệnh này chỉ có 4 việc:
 #   1. tra domain → user và thư mục site theo danh sách cố định bên dưới;
@@ -26,7 +28,7 @@ extra=()
 export_urls=0
 for a in "$@"; do
   case "$a" in
-    --no-delete|--delete-only) extra+=("$a") ;;
+    --no-delete|--delete-only|--purge-cache|--all|--dry-run) extra+=("$a") ;;
     --export-urls) export_urls=1 ;;
     --since=[0-9]*) [[ "$a" =~ ^--since=[0-9]+$ ]] && extra+=("$a") ;;
     *) echo "# bỏ qua tham số không được phép: $a" ;;

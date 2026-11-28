@@ -30,5 +30,11 @@
   },
   "kv": {
     "namespace_id": "a8dfab77d27f4db7ac1c015eaca013f7"
+  },
+  "urls": {
+    "skip_blogs": [
+      "/",
+      "/en/"
+    ]
   }
 }

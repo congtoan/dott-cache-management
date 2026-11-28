@@ -201,7 +201,9 @@ func runRemote(ctx context.Context, host, command, stage string, paths []string,
 				fmt.Fprintf(os.Stderr, "    dòng lạ từ VPS chính: %s\n", l)
 				continue
 			}
-			results <- result{Path: p.Path, Stage: stage, OK: p.OK, Ms: p.Ms, Bytes: p.Bytes, Err: p.Err}
+			if results != nil {
+				results <- result{Path: p.Path, Stage: stage, OK: p.OK, Ms: p.Ms, Bytes: p.Bytes, Err: p.Err}
+			}
 			if p.OK {
 				ok = append(ok, p.Path)
 			} else {
@@ -209,9 +211,15 @@ func runRemote(ctx context.Context, host, command, stage string, paths []string,
 			}
 		case strings.HasPrefix(l, "DONE"):
 			done = true
-			fmt.Println("    " + l)
+			if !quietRemote {
+				fmt.Println("    " + l)
+			}
+		case strings.HasPrefix(l, "PURGE "):
+			lastPurge = purgeSummary(l[6:])
 		default:
-			fmt.Println("    " + strings.TrimPrefix(l, "# "))
+			if !quietRemote || !strings.HasPrefix(l, "# ") {
+				fmt.Println("    " + strings.TrimPrefix(l, "# "))
+			}
 		}
 	}
 	werr := cmd.Wait()

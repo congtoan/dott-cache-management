@@ -34,7 +34,7 @@ if ( PHP_SAPI !== 'cli' ) {
 	exit( 1 );
 }
 
-$opt = getopt( '', array( 'root:', 'host:', 'urls:', 'parallel::', 'readonly', 'no-delete', 'delete-only', 'out::', 'limit::' ) );
+$opt = getopt( '', array( 'root:', 'host:', 'urls:', 'parallel::', 'readonly', 'no-delete', 'delete-only', 'purge-cache', 'all', 'dry-run', 'out::', 'limit::' ) );
 foreach ( array( 'root', 'host', 'urls' ) as $k ) {
 	if ( empty( $opt[ $k ] ) ) {
 		fwrite( STDOUT, "# thiếu --$k\nDONE ok=0 fail=0 skip=0\n" );
@@ -95,6 +95,67 @@ foreach ( (array) @file( $src, FILE_IGNORE_NEW_LINES ) as $l ) {
 }
 $pf_paths = array_keys( $pf_paths );
 pf_line( sprintf( '# %d path hợp lệ, %d bị bỏ', count( $pf_paths ), $pf_skip ) );
+
+/* --purge-cache: dọn thư mục cache WP Rocket của host, không nạp WordPress.
+ * stdin là danh sách path CẦN GIỮ (URL active trong DB của VPS phụ). Xóa:
+ *   - mọi bản mobile và .mobile-active (hệ thống cũ tạo 4 file + .mobile-active cho mỗi URL);
+ *   - mọi file cache trong thư mục KHÔNG thuộc danh sách giữ (thư mục mồ côi: bài đã xóa, URL bị loại);
+ *   - file index*.html lạ (vd bản theo query string) trong thư mục được giữ.
+ * Giữ index-https.html và index-https.html_gzip của path cần giữ (prefork sẽ xóa từng URL ngay trước khi render).
+ * --all: xóa hết (không giữ gì). --dry-run: chỉ đếm (dùng để kiểm tra sau khi chạy).
+ * Chỉ đụng file có tên index*.html, index*.html_gzip, .mobile-active; không xóa thư mục. */
+if ( isset( $opt['purge-cache'] ) ) {
+	$base = $pf_root . '/wp-content/cache/wp-rocket/' . $pf_host;
+	$all  = isset( $opt['all'] );
+	$dry  = isset( $opt['dry-run'] );
+	$keep = array();
+	foreach ( $pf_paths as $p ) {
+		$keep[ strtolower( $p ) ] = true;
+	}
+	$c = array( 'xóa_mobile' => 0, 'xóa_mồ_côi' => 0, 'xóa_lạ' => 0, 'xóa_all' => 0, 'giữ_html' => 0, 'giữ_gzip' => 0 );
+	$have_html = array();
+	$t0 = microtime( true );
+	if ( is_dir( $base ) ) {
+		$it = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $base, FilesystemIterator::SKIP_DOTS ) );
+		foreach ( $it as $f ) {
+			if ( ! $f->isFile() ) {
+				continue;
+			}
+			$name = $f->getFilename();
+			if ( '.mobile-active' !== $name && ! preg_match( '/^index.*\.html(_gzip)?$/', $name ) ) {
+				continue;
+			}
+			$rel = strtolower( substr( $f->getPath(), strlen( $base ) ) . '/' );
+			if ( $all ) {
+				$why = 'xóa_all';
+			} elseif ( '.mobile-active' === $name || false !== strpos( $name, 'mobile' ) ) {
+				$why = 'xóa_mobile';
+			} elseif ( empty( $keep[ $rel ] ) ) {
+				$why = 'xóa_mồ_côi';
+			} elseif ( 'index-https.html' === $name ) {
+				$c['giữ_html']++;
+				$have_html[ $rel ] = true;
+				continue;
+			} elseif ( 'index-https.html_gzip' === $name ) {
+				$c['giữ_gzip']++;
+				continue;
+			} else {
+				$why = 'xóa_lạ';
+			}
+			$c[ $why ]++;
+			if ( ! $dry ) {
+				@unlink( $f->getPathname() );
+			}
+		}
+	}
+	$missing = $all ? 0 : count( array_diff_key( $keep, $have_html ) );
+	pf_line( sprintf( '# %s %s trong %.1f s', $dry ? 'đếm (dry-run)' : 'dọn', $base, microtime( true ) - $t0 ) );
+	pf_line( 'PURGE ' . json_encode( $c + array( 'path_giữ' => count( $keep ), 'path_giữ_chưa_có_html' => $missing, 'dry_run' => $dry ), JSON_UNESCAPED_UNICODE ) );
+	@rmdir( $pf_tmp );
+	pf_line( "DONE ok=0 fail=0 skip=$pf_skip" );
+	exit( 0 );
+}
+
 if ( ! $pf_paths ) {
 	pf_line( "DONE ok=0 fail=0 skip=$pf_skip" );
 	exit( $pf_skip ? 1 : 0 );

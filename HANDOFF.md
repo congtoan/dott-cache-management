@@ -103,6 +103,13 @@ Header S3 phải giữ khi upload: `ContentType: text/html`, `CacheControl: publ
   - Lịch chốt: lấy phần thay đổi 8 giờ/lần, lấy toàn bộ 1 lần/ngày (chưa triển khai).
 - **KV test (28/11):** `dott-cache kv create|list|sync`, namespace `php81-cache-test`. `kv sync` chưa kiểm tra trạng thái upload S3.
 
+- **Worker test (28/11):** `deploy/worker/dott-cache-worker.js` chạy trên `dott-cache-php81-test.congtoan-real.workers.dev`. Giả lập châu lục bằng header bí mật. NA/SA đi Chicago, EU đi Frankfurt, nơi khác vào origin. Đã test 14 trường hợp.
+- **`dott-cache regen-all` (28/11, php81):**
+  - LIST S3 một lần (manifest), xóa một lần mọi file không phải `index-https.html`; giữ `index-https.html` và ghi đè khi upload.
+  - Dọn mobile và mồ côi trên server.
+  - Thứ tự: trang chủ và bài → archive trang 1 → phân trang. Prefork theo lô 500, upload song song.
+  - Kết quả: 1.448/1.448 URL trong 142 s, load VPS chính tối đa 2,04. **Cần điều tiết theo load trước khi chạy production.**
+
 ## 5. Việc tiếp theo (chủ site chọn)
 1. **Service `dott-cache` có hàng đợi** (SQLite, nhận sự kiện từ mu-plugin trên php81, render bằng HTTP hoặc prefork, upload nhiều đích), test trên php81 với bucket test.
 2. Đo prefork trên production (chỉ đọc, không ghi cache), khi chủ site cho phép.

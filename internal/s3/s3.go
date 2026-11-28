@@ -1,4 +1,4 @@
-// Package s3 là client S3 tối giản (chỉ PUT/HEAD/DELETE object) tự ký AWS SigV4,
+// Package s3 là client S3 tối giản (PUT/HEAD/DELETE object, LIST, DeleteObjects theo lô) tự ký AWS SigV4,
 // chỉ dùng thư viện chuẩn. Dùng cho Linode Object Storage (path-style URL).
 //
 // Vì sao không dùng aws-sdk-go-v2: chỉ cần 3 thao tác, tránh hàng chục module phụ thuộc,
@@ -16,6 +16,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net"
@@ -134,7 +135,117 @@ func (c *Client) Head(ctx context.Context, key string) (int, string, error) {
 // ---------------------------------------------------------------------------------------
 // AWS Signature Version 4
 
+// ListResult: một object trong danh sách.
+type ListResult struct {
+	Key  string
+	Size int64
+}
+
+// List liệt kê mọi object có prefix (ListObjectsV2, 1.000 object mỗi trang), gọi fn cho từng object.
+// Dùng để biết object nào thật sự có trên S3 trước khi xóa (server và S3 có thể lệch nhau).
+func (c *Client) List(ctx context.Context, prefix string, fn func(ListResult)) error {
+	token := ""
+	for {
+		q := map[string]string{"list-type": "2", "max-keys": "1000", "prefix": prefix}
+		if token != "" {
+			q["continuation-token"] = token
+		}
+		resp, err := c.doQ(ctx, http.MethodGet, "", q, nil, map[string]string{})
+		if err != nil {
+			return err
+		}
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("LIST %s: HTTP %d %.200s", prefix, resp.StatusCode, raw)
+		}
+		var r struct {
+			Contents []struct {
+				Key  string `xml:"Key"`
+				Size int64  `xml:"Size"`
+			} `xml:"Contents"`
+			IsTruncated bool   `xml:"IsTruncated"`
+			NextToken   string `xml:"NextContinuationToken"`
+		}
+		if err := xml.Unmarshal(raw, &r); err != nil {
+			return fmt.Errorf("LIST: XML lỗi: %w", err)
+		}
+		for _, o := range r.Contents {
+			fn(ListResult{Key: o.Key, Size: o.Size})
+		}
+		if !r.IsTruncated || r.NextToken == "" {
+			return nil
+		}
+		token = r.NextToken
+	}
+}
+
+// DeleteMany xóa tối đa 1.000 object trong một request (DeleteObjects, chế độ Quiet).
+// Trả về các key bị lỗi kèm lý do.
+func (c *Client) DeleteMany(ctx context.Context, keys []string) (map[string]string, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	if len(keys) > 1000 {
+		return nil, fmt.Errorf("DeleteMany: tối đa 1000 key, nhận %d", len(keys))
+	}
+	var b bytes.Buffer
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?><Delete><Quiet>true</Quiet>`)
+	for _, k := range keys {
+		b.WriteString("<Object><Key>")
+		xml.EscapeText(&b, []byte(k))
+		b.WriteString("</Key></Object>")
+	}
+	b.WriteString("</Delete>")
+	body := b.Bytes()
+	sum := md5.Sum(body)
+	resp, err := c.doQ(ctx, http.MethodPost, "", map[string]string{"delete": ""}, body,
+		map[string]string{"content-md5": base64.StdEncoding.EncodeToString(sum[:]), "content-type": "application/xml"})
+	if err != nil {
+		return nil, err
+	}
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("DeleteObjects: HTTP %d %.200s", resp.StatusCode, raw)
+	}
+	var r struct {
+		Errors []struct {
+			Key     string `xml:"Key"`
+			Code    string `xml:"Code"`
+			Message string `xml:"Message"`
+		} `xml:"Error"`
+	}
+	xml.Unmarshal(raw, &r)
+	failed := map[string]string{}
+	for _, e := range r.Errors {
+		failed[e.Key] = e.Code + " " + e.Message
+	}
+	return failed, nil
+}
+
 func (c *Client) do(ctx context.Context, method, key string, body []byte, h map[string]string) (*http.Response, error) {
+	return c.doQ(ctx, method, key, nil, body, h)
+}
+
+// canonQuery: query string chuẩn của SigV4 (sắp theo tên, mã hóa RFC 3986, "delete" thành "delete=").
+func canonQuery(q map[string]string) string {
+	if len(q) == 0 {
+		return ""
+	}
+	ks := make([]string, 0, len(q))
+	for k := range q {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	parts := make([]string, len(ks))
+	for i, k := range ks {
+		parts[i] = encodePath(k) + "=" + strings.ReplaceAll(encodePath(q[k]), "/", "%2F")
+	}
+	return strings.Join(parts, "&")
+}
+
+func (c *Client) doQ(ctx context.Context, method, key string, query map[string]string, body []byte, h map[string]string) (*http.Response, error) {
 	now := time.Now().UTC()
 	amzDate := now.Format("20060102T150405Z")
 	date := now.Format("20060102")
@@ -156,7 +267,8 @@ func (c *Client) do(ctx context.Context, method, key string, body []byte, h map[
 		ch.WriteString(k + ":" + strings.TrimSpace(h[k]) + "\n")
 	}
 	signed := strings.Join(names, ";")
-	canonReq := strings.Join([]string{method, canonURI, "", ch.String(), signed, payloadHash}, "\n")
+	cq := canonQuery(query)
+	canonReq := strings.Join([]string{method, canonURI, cq, ch.String(), signed, payloadHash}, "\n")
 
 	scope := date + "/" + c.T.Region + "/s3/aws4_request"
 	toSign := "AWS4-HMAC-SHA256\n" + amzDate + "\n" + scope + "\n" + sha256Hex([]byte(canonReq))
@@ -171,7 +283,11 @@ func (c *Client) do(ctx context.Context, method, key string, body []byte, h map[
 	if body != nil {
 		rd = bytes.NewReader(body)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.scheme+"://"+c.host+canonURI, rd)
+	u := c.scheme + "://" + c.host + canonURI
+	if cq != "" {
+		u += "?" + cq
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u, rd)
 	if err != nil {
 		return nil, err
 	}
