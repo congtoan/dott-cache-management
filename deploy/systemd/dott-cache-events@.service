@@ -1,0 +1,11 @@
+[Unit]
+Description=dott-cache events %i (sự kiện sửa bài, bình luận → cache)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/root/tool/cache-system/bin/dott-cache-blog.sh %i events
+MemoryMax=300M
+Nice=10
+CPUQuota=50%
+TimeoutStartSec=1h

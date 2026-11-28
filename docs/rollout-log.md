@@ -582,5 +582,25 @@ Mục đích: mô phỏng diaocthongthai.com để test tt-core, cache một b�
 - **Cảnh báo:** nếu ai lưu thiết lập WP Rocket của site vi trước khi có tt-core, khách mobile của toàn site vi sẽ bắt đầu nhận bản desktop.
 - **Vì sao 8 bài test không sinh lại bản mobile khi chưa có mu-plugin:** thư mục không còn `.mobile-active`, nên rocket-nginx trả thẳng `index-https.html` cho mọi khách, kể cả mobile. Request không tới PHP, nên WP Rocket không ghi bản mobile. Log 13:04–13:11 có request iPhone và Android vào các bài này, và thư mục vẫn chỉ có 2 file. Trạng thái này sẽ mất nếu một request mobile lọt vào PHP (file bị xóa, request có cookie hoặc query string). Mu-plugin, khi file config đã được tạo lại, là thứ giữ cho bền.
 
+### Cập nhật gần như ngay khi sửa bài / có bình luận: mu-plugin ghi sự kiện (28/11, chủ site chọn)
+Chủ site chọn cập nhật gần như ngay (INVENTORY mục 3.A.2), thay vì chờ `sync` 8 giờ/lần. **Đã viết, chưa cài lên VPS chính nào.**
+- **Cách làm:** bản đơn giản hơn design mục 7.1. Không tạo bảng trong DB WordPress và không có REST; mu-plugin chỉ ghi file.
+  - `wp/mu-plugins/dott-cache-events.php` (1.0.0): ghi `<thư mục site>/dott-cache-events/YYYYMMDD.jsonl`. Thư mục nằm cạnh `public_html` (ngoài web root, trong `open_basedir` của site; site user có quyền ghi, đã kiểm tra chỉ đọc).
+  - Hook: `transition_post_status` (đăng, gỡ, sửa bài đang publish), `pre_post_update` / `wp_trash_post` / `before_delete_post` (chụp path cũ trước khi đổi slug hoặc gỡ), bình luận (`comment_post` đã duyệt, `transition_comment_status` vào/ra approved, `edit_comment`, `delete_comment`), `edited_term`, `pre_delete_term`, `after_rocket_clean_post`.
+  - Path được tính lúc `shutdown`, khi slug và term đã lưu xong (Gutenberg lưu term sau `wp_update_post`). Cách chuẩn hóa giống `export-urls.php`.
+  - Sửa bài: làm mới bài, trang 1 archive của term mới và term cũ, trang chủ. Đổi slug: gỡ URL cũ. Gỡ bài: gỡ URL, làm mới archive và trang chủ. Bình luận: chỉ làm mới bài.
+  - Lỗi chỉ ghi `error_log`. Tắt nhanh: `define('DOTT_CACHE_EVENTS_OFF', true)`, hoặc xóa file.
+- **Đọc sự kiện:** `wp/mu-plugins/dott-cache/events.php` (CLI, không nạp WordPress), gọi qua `dott-prefork <domain> --events --after=<mốc>`. Không chờ khóa prefork. Mốc `YYYYMMDD:offset`; chỉ trả dòng đã ghi trọn. Xóa file quá 14 ngày.
+- **`dott-cache events -site X -blog /`** (VPS phụ, timer `dott-cache-events@vi` mỗi phút):
+  - lần đầu chỉ lưu mốc;
+  - lọc theo `-blog` và config `urls`; path trùng thì sự kiện sau cùng thắng;
+  - lưu mốc **trước** khi xử lý (lỗi không làm lặp mãi; `sync` 8 giờ/lần vẫn là lưới an toàn);
+  - gỡ: KV → server → S3 (hàm `removePaths` tách từ `sync`), đánh dấu `removed` trong DB; làm mới: `update -txt`;
+  - đang có lệnh khác giữ khóa site thì bỏ lượt, không lỗi, lượt sau xử lý bù; quá `-max` 1000 URL thì chỉ báo.
+- **Đã kiểm tra:**
+  - `go vet` + build trên VPS phụ OK; `php -l` 2 file PHP OK; `bash -n` `dott-prefork` OK.
+  - `events.php` test trên VPS phụ (cài `php-cli`, thư mục tạm): mốc init, đọc qua 2 ngày, dừng trước dòng ghi dở rồi đọc tiếp, `--max`, mốc sai, mốc vượt cỡ file, xóa file quá 14 ngày. **Tìm ra và đã sửa 1 lỗi:** PHP đổi key `"20261128"` thành số nguyên nên so `===` với mốc sai, đọc lại sự kiện cũ.
+- **Chưa test:** mu-plugin trong WordPress thật, và `dott-cache events` đầu-cuối. Cần cài lên php81 (VPS chính), nên phải chờ chủ site duyệt.
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.

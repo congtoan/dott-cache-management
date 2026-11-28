@@ -106,32 +106,7 @@ func cmdSync(args []string) {
 
 	// ---- 2. URL đã mất: KV → server → S3 ----
 	if len(removed) > 0 {
-		t := time.Now()
-		if cfg.KV.NamespaceID != "" {
-			env := loadEnv(firstNonEmpty(cfg.KV.CFEnv, home()+"/config/secrets/cf.env"))
-			kvc := kv.New(env["CF_API_TOKEN"], env["CF_ACCOUNT_ID"], cfg.KV.NamespaceID)
-			keys := make([]string, len(removed))
-			for i, p := range removed {
-				keys[i] = kv.Key(p)
-			}
-			failed, err := kvc.DeleteBulk(ctx, keys)
-			fmt.Printf("[2] KV: xóa %d key, lỗi %d %s\n", len(keys), len(failed), errStr(err))
-		}
-		if _, _, err := runRemote(ctx, cfg.Renew.SSHHost, cfg.Renew.Command+" --delete-only", "disk-delete", removed, nil); err != nil {
-			fmt.Printf("[2] xóa file trên server lỗi: %v\n", err)
-		}
-		var wg sync.WaitGroup
-		for _, c := range clients {
-			wg.Add(1)
-			go func(c *s3.Client) {
-				defer wg.Done()
-				keys := keysInDirs(ctx, c, removed, true)
-				n, fails := deleteKeys(ctx, c, keys, 4)
-				fmt.Printf("[2] S3 %s: xóa %d/%d object của URL đã mất, lỗi %d\n", c.T.ID, n, len(keys), len(fails))
-			}(c)
-		}
-		wg.Wait()
-		fmt.Printf("[2] gỡ %d URL đã mất: %.1f s\n", len(removed), time.Since(t).Seconds())
+		removePaths(ctx, cfg, clients, removed, "2")
 	}
 
 	// ---- 3. Cập nhật URL mới / đã sửa ----
@@ -150,6 +125,37 @@ func cmdSync(args []string) {
 	}
 	cmdUpdate(ua)
 	fmt.Printf("sync xong: %.1f s\n", time.Since(start).Seconds())
+}
+
+// removePaths gỡ các URL không còn trên site: DELETE key KV TRƯỚC (Worker thôi trỏ vào S3), rồi xóa file
+// trên server (dott-prefork --delete-only), rồi xóa mọi object của path đó trên S3 (LIST để biết object nào có).
+func removePaths(ctx context.Context, cfg Config, clients []*s3.Client, removed []string, step string) {
+	t := time.Now()
+	if cfg.KV.NamespaceID != "" {
+		env := loadEnv(firstNonEmpty(cfg.KV.CFEnv, home()+"/config/secrets/cf.env"))
+		kvc := kv.New(env["CF_API_TOKEN"], env["CF_ACCOUNT_ID"], cfg.KV.NamespaceID)
+		keys := make([]string, len(removed))
+		for i, p := range removed {
+			keys[i] = kv.Key(p)
+		}
+		failed, err := kvc.DeleteBulk(ctx, keys)
+		fmt.Printf("[%s] KV: xóa %d key, lỗi %d %s\n", step, len(keys), len(failed), errStr(err))
+	}
+	if _, _, err := runRemote(ctx, cfg.Renew.SSHHost, cfg.Renew.Command+" --delete-only", "disk-delete", removed, nil); err != nil {
+		fmt.Printf("[%s] xóa file trên server lỗi: %v\n", step, err)
+	}
+	var wg sync.WaitGroup
+	for _, c := range clients {
+		wg.Add(1)
+		go func(c *s3.Client) {
+			defer wg.Done()
+			keys := keysInDirs(ctx, c, removed, true)
+			n, fails := deleteKeys(ctx, c, keys, 4)
+			fmt.Printf("[%s] S3 %s: xóa %d/%d object của URL đã mất, lỗi %d\n", step, c.T.ID, n, len(keys), len(fails))
+		}(c)
+	}
+	wg.Wait()
+	fmt.Printf("[%s] gỡ %d URL đã mất: %.1f s\n", step, len(removed), time.Since(t).Seconds())
 }
 
 func dedupe(s []string) []string {
@@ -171,8 +177,15 @@ var siteLocked *os.File
 // lockSite: chỉ một lệnh ghi chạy trên một site mỗi lúc (file data/<domain>/.lock). Gọi lồng nhau trong
 // cùng tiến trình (sync → update) không bị chặn.
 func lockSite(site string, cfg Config) {
+	if !tryLockSite(site, cfg) {
+		die("đang có lệnh khác chạy trên %s (khóa %s)", firstNonEmpty(site, cfg.Origin.Host), filepath.Join(siteData(site, cfg), ".lock"))
+	}
+}
+
+// tryLockSite: như lockSite nhưng trả false thay vì dừng khi đang có lệnh khác (dùng cho "events" chạy mỗi phút).
+func tryLockSite(site string, cfg Config) bool {
 	if siteLocked != nil {
-		return
+		return true
 	}
 	dir := siteData(site, cfg)
 	os.MkdirAll(dir, 0o700)
@@ -181,9 +194,11 @@ func lockSite(site string, cfg Config) {
 		die("khóa site: %v", err)
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		die("đang có lệnh khác chạy trên %s (khóa %s)", firstNonEmpty(site, cfg.Origin.Host), f.Name())
+		f.Close()
+		return false
 	}
 	siteLocked = f
+	return true
 }
 
 // checkWrite: config có "write_blogs" (vd ["/"]) thì chỉ cho ghi khi phạm vi nằm trong một blog được phép.

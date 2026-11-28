@@ -4,6 +4,7 @@
 #   printf '/tttest/abc/\n' | dott-prefork php81.congtoan.net [--no-delete | --delete-only]
 #   <danh sách path cần giữ> | dott-prefork <domain> --purge-cache [--all] [--dry-run]   (dọn cache cũ, mồ côi, mobile)
 #   dott-prefork <domain> --export-urls [--since=UNIX]                                  (danh sách URL)
+#   dott-prefork <domain> --events --after=init|YYYYMMDD:OFFSET                         (sự kiện sửa bài, bình luận)
 #
 # Bộ chuyển lệnh này chỉ có 4 việc:
 #   1. tra domain → user và thư mục site theo danh sách cố định bên dưới;
@@ -26,10 +27,14 @@ shift
 
 extra=()
 export_urls=0
+events=0
+after=init
 for a in "$@"; do
   case "$a" in
     --no-delete|--delete-only|--purge-cache|--all|--dry-run|--keep-orphans) extra+=("$a") ;;
     --export-urls) export_urls=1 ;;
+    --events) events=1 ;;
+    --after=*) [[ "$a" =~ ^--after=(init|[0-9]{8}:[0-9]+)$ ]] && after="${a#--after=}" ;;
     --replace) ;; # xử lý ở dưới
     --since=[0-9]*) [[ "$a" =~ ^--since=[0-9]+$ ]] && extra+=("$a") ;;
     --terms=*) [[ "$a" =~ ^--terms=[0-9]+:[a-z0-9_-]+:[0-9]+(,[0-9]+:[a-z0-9_-]+:[0-9]+)*$ ]] && extra+=("$a") ;;
@@ -51,6 +56,15 @@ for a in "$@"; do
     exit 0
   fi
 done
+
+# --events: đọc sự kiện do mu-plugin dott-cache-events.php ghi (events.php, không nạp WordPress).
+# Rất nhẹ (chỉ đọc file), nên không chờ khóa chung. Thư mục sự kiện nằm cạnh public_html.
+if [ "$events" = 1 ]; then
+  script="$root/wp-content/mu-plugins/dott-cache/events.php"
+  [ -f "$script" ] || { echo "# thiếu $script"; echo "DONE events=0"; exit 2; }
+  runuser -u "$user" -- php "$script" --dir="$(dirname "$root")/dott-cache-events" --after="$after" 2>/dev/null
+  exit 0
+fi
 
 # --export-urls: in danh sách URL của site (export-urls.php), chỉ đọc DB.
 # Vẫn giữ khóa chung, vì việc này tốn CPU giống một lô prefork.

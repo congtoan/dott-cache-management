@@ -121,6 +121,8 @@ func main() {
 		cmdReplace(os.Args[2:])
 	case "sync":
 		cmdSync(os.Args[2:])
+	case "events":
+		cmdEvents(os.Args[2:])
 	case "regen-all": // tên cũ của "update -all"
 		cmdRegenAll(os.Args[2:])
 	default:
@@ -138,6 +140,8 @@ func usage() {
       -blog "/" | "/en/" | blog_id: chỉ một subsite (dùng được với mọi phạm vi, kể cả -all)
   CHẠY THEO LỊCH (thay đổi trên site → cache, S3, KV):
   dott-cache sync -site <domain> [-blog /] [-full] [-dry-run]   (8 giờ/lần không -full; 1 lần/ngày -full)
+  dott-cache events -site <domain> [-blog /] [-dry-run] [-max 1000] [-quiet=false]
+      (mỗi phút: sự kiện từ mu-plugin dott-cache-events.php → làm mới / gỡ ngay)
   SỬA NHANH FILE CACHE (không render lại; server + S3):
   dott-cache replace -site <domain> -content -search "cũ" -replace "mới" [-regex] <phạm vi> [-yes]
   dott-cache replace -site <domain> -version [-files generatepress_child/style.css,...] <phạm vi> [-yes]

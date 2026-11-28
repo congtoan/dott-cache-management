@@ -74,6 +74,8 @@ Chạy `dott-cache` không tham số để xem đủ cờ.
 
 **Lần 2, site en (`-blog /en/`):** theme `generatepress_en` + build → `DOTT_SINGLE_CACHE_BLOGS = array(1, 2)` + tạo lại config `.en` → `write_blogs: ["/", "/en/"]` → `update -all -blog /en/` → bỏ `LEGACY_PREFIXES` trong Worker → timer instance `en`.
 
+**Cập nhật gần như ngay (chủ site chọn 28/11):** mu-plugin `wp/mu-plugins/dott-cache-events.php` ghi sự kiện ra file, `dott-cache/events.php` đọc, `dott-cache events` + timer `dott-cache-events@` mỗi phút (xem rollout-log). **Đã viết, chưa cài.** Bước kế: cài lên php81 (mu-plugin, `events.php`, `dott-prefork` mới) để test đầu-cuối, rồi cài production cùng P4 và bật timer cùng P8.
+
 **Còn mở, không chặn rollout:**
 - Lưu trạng thái render/upload từng URL vào DB, rồi thêm `dott-cache status`.
 - Báo Telegram (dùng chung bot với `/root/health`).

@@ -1,0 +1,10 @@
+[Unit]
+Description=dott-cache events %i mỗi phút
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=60s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
