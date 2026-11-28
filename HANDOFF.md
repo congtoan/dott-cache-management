@@ -94,7 +94,7 @@ Header S3 phải giữ khi upload: `ContentType: text/html`, `CacheControl: publ
   - Chi tiết: rollout-log.
 
 - **`renew -mode auto|http|prefork` (28/11):** tối đa 4 URL thì dùng http (`--delete-only` rồi GET), nhiều hơn thì dùng prefork; prefork lỗi thì thử lại bằng HTTP.
-- **Cảnh báo `open_file_cache`:** nginx (`open_file_cache_valid 120s`) có thể trả bản cũ tới 2 phút sau khi file cache bị xóa hoặc thay. Tool đã chặn bằng `MinCachedAt` (không upload bản cũ). Cách sửa gốc là thêm `open_file_cache off;` ở đầu `rocket-page-cache.conf`, **đang chờ chủ site duyệt**.
+- **Cảnh báo `open_file_cache`:** nginx (`open_file_cache_valid 120s`) có thể trả bản cũ tới 2 phút sau khi file cache bị xóa hoặc thay. Tool đã chặn bằng `MinCachedAt` (không upload bản cũ). **Đã sửa gốc 28/11** (chủ site đồng ý): `open_file_cache off;` ở đầu `/etc/nginx/extra/rocket-page-cache.conf` (backup `.bak-2026-11-28`), đã reload, đã kiểm tra.
 
 ## 5. Việc tiếp theo (chủ site chọn)
 1. **Service `dott-cache` có hàng đợi** (SQLite, nhận sự kiện từ mu-plugin trên php81, render bằng HTTP hoặc prefork, upload nhiều đích), test trên php81 với bucket test.

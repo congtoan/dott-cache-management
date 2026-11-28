@@ -307,6 +307,13 @@ Mục đích: mô phỏng diaocthongthai.com để test tt-core, cache một b�
   - **Đã chặn ở tool:** `origin.MinCachedAt`. renew chỉ nhận bản có `cached@` >= thời điểm bắt đầu trừ 5 s. Bản cũ thì thử lại 3 lần, sau đó báo lỗi "origin vẫn trả bản cache cũ… open_file_cache" và **không upload**. Đã test: 5 URL bị chặn đúng.
   - **Cách sửa gốc (chờ chủ site đồng ý, vì file dùng chung cho production):** thêm `open_file_cache off;` ở đầu `/etc/nginx/extra/rocket-page-cache.conf` (cấp server, áp dụng cho cả `if -f` lẫn `location`), sau đó `nginx -t` và reload.
   - Production hiện chưa bị ảnh hưởng: thư mục cache còn `.mobile-active`, nên request vẫn đi qua PHP.
+- **Đã sửa gốc (28/11, chủ site đồng ý):**
+  - Thêm `open_file_cache off;` ở đầu `/etc/nginx/extra/rocket-page-cache.conf`, kèm comment giải thích lý do. Nguồn: `deploy/nginx/rocket-page-cache.conf`.
+  - Backup: `rocket-page-cache.conf.bak-2026-11-28`.
+  - `nginx -t` ok, đã `systemctl reload nginx`. File này được include cho diaocthongthai.com và php81.
+  - Kiểm tra sau reload: `diaocthongthai.com/`, `/en/`, `php81/tttest/`, `php81/` đều 200.
+  - Tái hiện lại lỗi cũ: GET 2 lần (HIT) → `--delete-only` → GET trả **MISS** (render mới) → GET trả **HIT với `cached@` mới**. Không còn bản cũ.
+  - Kiểm tra `MinCachedAt` trong tool vẫn giữ, để phòng trường hợp khác.
 
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.
