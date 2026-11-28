@@ -1,0 +1,85 @@
+# Kiến trúc pool: sự kiện tức thì + một hàng đợi duy nhất (chốt 28/11/2026)
+
+> Thay cho: lịch `sync` 8 giờ/lần, `sync -full` hằng ngày, và ý tưởng "events đọc file mỗi phút" (đã bỏ).
+> Chủ site chốt qua thảo luận 28/11. Mục 7 và 11 của [design-server-only.md](design-server-only.md) được thay bằng file này.
+
+## 1. Nguyên tắc
+1. **Site là nguồn sự thật** (cần cache những gì). **KV + S3 + đĩa là trạng thái thật** (đang phục vụ những gì). Không giữ bản sao danh sách URL để "cho khớp".
+2. **WordPress chỉ báo "cái gì đổi"**, không tính path, không gọi Cloudflare/S3. Mọi quy tắc nằm ở Go.
+3. **Chỉ một nơi ghi KV/S3/cache**: service `dott-cache serve` trên VPS phụ, một worker. Không có race giữa nhiều tiến trình.
+4. Mọi việc (sự kiện, cập nhật hàng loạt, đối soát) đi qua **một pool có ưu tiên, lưu xuống file** (SQLite), để sự kiện không phải chờ việc hàng loạt và restart không mất việc.
+
+## 2. Luồng
+```
+WordPress (mu-plugin dott-cache-events.php, mỏng)
+  │  POST http://127.0.0.1:8790/event   (loopback VPS chính)
+  ▼
+SSH reverse tunnel (VPS phụ mở: ssh -N -R 127.0.0.1:8790:127.0.0.1:8790 main)
+  ▼
+dott-cache serve (VPS phụ, 127.0.0.1:8790, MemoryMax)
+  ├─ inbox (SQLite)  ← sự kiện thô, trả 202 ngay
+  ├─ resolver: gom 3 s → ssh main dott-prefork <site> --export-urls --ids=...  (trạng thái MỚI do site trả)
+  │            so với trạng thái CŨ do plugin gửi → refresh / remove, áp bộ lọc config
+  ├─ pool (SQLite): path → action, ưu tiên, generation
+  └─ worker (1): lô → render (prefork / HTTP) → lấy HTML → upload S3 (nhiều luồng, mọi đích) → KV → xong
+CLI: dott-cache submit ... (gửi việc vào pool), dott-cache pool status
+```
+
+## 3. mu-plugin mỏng (`wp/mu-plugins/dott-cache-events.php`)
+- Hook: đăng/sửa/gỡ/xóa bài, bình luận (duyệt, bỏ duyệt, sửa, xóa), sửa/xóa term, WP Rocket "clear this cache".
+- Trước khi sửa, chụp **trạng thái cũ dạng thô**: URL cũ (`get_permalink`), ID term cũ. Không chuẩn hóa path.
+- Cuối request: **một** POST không chờ trả lời (`blocking=false`), body `{"host":..,"events":[{"b":1,"type":"post","id":123,"old_url":"..","old_terms":[5,9]}, {"b":1,"type":"comment","post":123}, {"b":1,"type":"term","tax":"category","id":5,"old_url":".."}]}`.
+- URL và token đọc từ `<thư mục site>/dott-cache-hook.json` (ngoài `public_html`). Không có file thì không làm gì.
+- Tunnel tắt: cổng loopback đóng, kết nối bị từ chối ngay, ghi `error_log`. Lưới an toàn: đối soát hằng ngày.
+
+## 4. Trạng thái mới: `export-urls.php --ids`
+- `--ids=1:p123,1:t:category:5,...`: với bài, trả path, trạng thái (còn publish hay không), path trang 1 và **số trang** của mọi term của bài, trang chủ; với term, trả path trang 1 và số trang.
+- Một lần gọi cho cả lô đã gom; chỉ nạp WordPress của các blog có trong lô.
+- Chuẩn hóa path chỉ có **một bản** (trong `export-urls.php`).
+
+## 5. Quyết định refresh / remove (Go)
+| Sự kiện | Việc |
+|---|---|
+| Bài còn publish | refresh bài; nếu `old_url` khác path mới thì remove path cũ; refresh trang 1 các term mới và cũ, trang chủ |
+| Bài không còn (nháp, thùng rác, xóa) | remove `old_url`; refresh trang 1 các term cũ, trang chủ |
+| Bình luận | refresh bài (nếu còn publish) |
+| Term sửa / xóa | refresh trang 1 / remove `old_url` |
+| Phân trang | với mỗi term bị ảnh hưởng có N trang: thêm `/page/N/` nếu KV chưa có; remove `/page/N+1/` nếu KV còn |
+
+Mọi path đi qua bộ lọc `urls` của config và `write_blogs`.
+
+## 6. Pool
+- Bảng `pool`: mỗi path một dòng: `action` (refresh | remove), `prio`, `ord` (thứ tự trong cùng mức), `gen` (tăng mỗi khi dòng đổi), `state`, `tries`, `next_at`, `last_err`, `src`.
+- Mức ưu tiên: 0 gỡ; 1 sự kiện: bài; 2 sự kiện: archive, trang chủ, phân trang; 3 thủ công, đối soát; 4 cập nhật hàng loạt (`submit -all`).
+- **Gộp theo path:** việc mới thay hành động cũ và giữ mức ưu tiên cao hơn.
+- **Generation:** worker ghi nhớ `gen` lúc lấy lô. Xong lô, chỉ PUT KV và xóa dòng nếu `gen` không đổi. Nếu path đã chuyển sang remove trong lúc render, không PUT KV; lượt remove sẽ dọn S3.
+- **Lô:** việc mức 0–2 lấy tối đa 20 URL (≤ 4 thì HTTP, nhiều hơn thì prefork); mức 3–4 lấy 40 URL prefork. Sự kiện chờ tối đa một lô hàng loạt (khoảng 10–30 s).
+- **Lỗi:** thử lại có giãn cách (1, 5, 30 phút), quá 5 lần thì ghi `failed` vào log và bỏ khỏi pool.
+- Điều tiết theo load như cũ (`max_load` 1,5) trước mỗi lô.
+
+## 7. Các tầng của worker
+| Tầng | Số luồng | Ghi chú |
+|---|---|---|
+| Render | 1 (cho mọi site, vì chung 1 vCPU) | prefork qua `dott-prefork`, hoặc xóa file + HTTP |
+| Lấy HTML từ VPS chính | `origin.workers` (2–4) | |
+| Upload S3 | `workers` của từng đích, các đích song song | hàm `runUpload` có sẵn |
+| KV | GET từng key (song song) rồi PUT key còn thiếu | gói miễn phí chỉ 1.000 lượt ghi/ngày, nên không PUT key đã có |
+
+Upload của lô trước chạy gối đầu với render của lô sau.
+
+## 8. Đối soát và cập nhật hàng loạt
+- `dott-cache submit -all -blog /`: export toàn bộ, đẩy vào pool mức 4 theo thứ tự trang chủ → bài → archive trang 1 → phân trang.
+- Đối soát hằng ngày (export + list KV + list S3: thêm cái thiếu, gỡ mồ côi, chặn khi > 2%) và gỡ `state.db`: **đợt sau**, khi pool đã chạy ổn.
+- Trong lúc `serve` chạy, nó giữ khóa site: các lệnh ghi CLI cũ (`update`, `sync`, `replace`) bị từ chối, phải dùng `submit`.
+
+## 9. Bảo mật
+- `serve` bind `127.0.0.1` (quy tắc CLAUDE.md), `MemoryMax`. Không mở cổng public.
+- Tunnel dùng `GatewayPorts no` của VPS chính: cổng 8790 chỉ mở trên loopback VPS chính.
+- Mọi process trên VPS chính gọi được cổng loopback, nên vẫn cần token: mỗi site một token (`config/secrets/hook-<site>.token` trên VPS phụ, `dott-cache-hook.json` trên site), so bằng `subtle.ConstantTimeCompare`; host trong body phải khớp token.
+- Tunnel hiện dùng key root `main`; key riêng có `permitlisten`/`command=` là việc còn mở (HANDOFF).
+
+## 10. Thứ tự triển khai
+1. php81: plugin mỏng, `--ids`, `serve` + pool + tunnel; test (sự kiện, đổi slug, gỡ, bình luận, phân trang, sự kiện giữa lúc `submit -all`, restart giữa chừng, tunnel tắt).
+2. Production: P6–P7 như kế hoạch bằng CLI hiện tại (chưa có `serve`).
+3. Production: bật `serve` + tunnel + plugin (thay P8).
+4. Đối soát hằng ngày qua pool, gỡ `state.db` và `urls sync`.

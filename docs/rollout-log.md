@@ -602,5 +602,12 @@ Chủ site chọn cập nhật gần như ngay (INVENTORY mục 3.A.2), thay vì
   - `events.php` test trên VPS phụ (cài `php-cli`, thư mục tạm): mốc init, đọc qua 2 ngày, dừng trước dòng ghi dở rồi đọc tiếp, `--max`, mốc sai, mốc vượt cỡ file, xóa file quá 14 ngày. **Tìm ra và đã sửa 1 lỗi:** PHP đổi key `"20261128"` thành số nguyên nên so `===` với mốc sai, đọc lại sự kiện cũ.
 - **Chưa test:** mu-plugin trong WordPress thật, và `dott-cache events` đầu-cuối. Cần cài lên php81 (VPS chính), nên phải chờ chủ site duyệt.
 
+### Đổi hướng: sự kiện đẩy qua tunnel + pool (28/11, chủ site chốt sau thảo luận)
+- Chủ site không muốn kiểu hỏi file mỗi phút. Sau khi bàn: WordPress POST sự kiện, đi qua SSH reverse tunnel (giữ quy tắc bind `127.0.0.1`), tới service Go có pool lưu xuống file. Plugin mỏng (chỉ ID + URL cũ thô), Go hỏi trạng thái mới qua `export-urls --ids`.
+- Lý do bỏ port public: tốc độ như nhau (render 200–600 ms/URL mới là nút cổ chai); VPS phụ giữ key root vào production nên không mở thêm cửa.
+- Lý do không cho WordPress ghi thẳng KV: thứ tự S3 trước, KV sau; hai nơi cùng ghi KV gây race (bài đã gỡ sống lại); token Cloudflare phải nằm trong site.
+- Đo (chỉ đọc): list toàn bộ KV production **46,9 s**; dùng được cho đối soát hằng ngày, không dùng cho từng sự kiện.
+- Bản "events đọc file mỗi phút" (commit 6a8f2d1) bị thay. Thiết kế: [design-pool.md](design-pool.md).
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.

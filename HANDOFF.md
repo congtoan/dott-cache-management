@@ -3,6 +3,7 @@
 > Điểm bắt đầu cho hội thoại mới. **Chỉ cần đọc file này và [docs/INVENTORY-2026-11-28.md](docs/INVENTORY-2026-11-28.md).**
 > Tài liệu khác chỉ đọc khi cần tra cứu:
 > - [docs/rollout-log.md](docs/rollout-log.md): nhật ký và số đo từng bước (dài);
+> - [docs/design-pool.md](docs/design-pool.md): **kiến trúc sự kiện + pool** (thay mục 7, 11 của design-server-only);
 > - [docs/design-server-only.md](docs/design-server-only.md): thiết kế, mục 11b là bố cục thư mục;
 > - [docs/HISTORY.md](docs/HISTORY.md): mốc, tag, những điều từng hiểu sai;
 > - [docs/design-tt-core.md](docs/design-tt-core.md): theme tt-core.
@@ -74,7 +75,11 @@ Chạy `dott-cache` không tham số để xem đủ cờ.
 
 **Lần 2, site en (`-blog /en/`):** theme `generatepress_en` + build → `DOTT_SINGLE_CACHE_BLOGS = array(1, 2)` + tạo lại config `.en` → `write_blogs: ["/", "/en/"]` → `update -all -blog /en/` → bỏ `LEGACY_PREFIXES` trong Worker → timer instance `en`.
 
-**Cập nhật gần như ngay (chủ site chọn 28/11):** mu-plugin `wp/mu-plugins/dott-cache-events.php` ghi sự kiện ra file, `dott-cache/events.php` đọc, `dott-cache events` + timer `dott-cache-events@` mỗi phút (xem rollout-log). **Đã viết, chưa cài.** Bước kế: cài lên php81 (mu-plugin, `events.php`, `dott-prefork` mới) để test đầu-cuối, rồi cài production cùng P4 và bật timer cùng P8.
+**Kiến trúc pool (chủ site chốt 28/11): [docs/design-pool.md](docs/design-pool.md).**
+- WordPress (mu-plugin mỏng) POST sự kiện qua SSH reverse tunnel → `dott-cache serve` trên VPS phụ → pool SQLite có ưu tiên → một worker render, upload S3 nhiều luồng, KV.
+- Bỏ lịch `sync` 8 giờ/lần; bản "đọc file sự kiện mỗi phút" đã bỏ.
+- Site là nguồn sự thật, KV/S3/đĩa là trạng thái thật. `state.db` (danh sách URL) sẽ bỏ ở đợt sau.
+- Thứ tự: test trên php81 → P6–P7 production bằng CLI hiện tại → bật `serve` + tunnel + plugin thay cho P8.
 
 **Còn mở, không chặn rollout:**
 - Lưu trạng thái render/upload từng URL vào DB, rồi thêm `dott-cache status`.
