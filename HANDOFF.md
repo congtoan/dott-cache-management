@@ -43,7 +43,8 @@ Chạy `dott-cache` không tham số để xem đủ cờ.
 | Thành phần | Trạng thái |
 |---|---|
 | rocket-nginx + `open_file_cache off` | **Đang chạy** (`/etc/nginx/extra/rocket-page-cache.conf`). Thư mục còn `.mobile-active` thì vẫn đi qua PHP như cũ |
-| `mu-plugins/dott-cache/prefork-render.php` | Đã cài (P1). `export-urls.php` và `replace-cache.php` **chưa cài** |
+| `mu-plugins/dott-cache/` | `prefork-render.php` (P1), `export-urls.php` (có `--ids`) và `replace-cache.php` (P4, 28/11) |
+| **WP Rocket config blog 1** | **Đã tạo lại 28/11 17:05: `do_caching_mobile_files = 0`** (một bản cache cho mọi thiết bị). en vẫn tách mobile. Backup `/root/backup-p4-2026-11-28/` |
 | `/usr/local/sbin/dott-prefork` | Có `diaocthongthai.com` |
 | **mu-plugin `dott-single-cache.php`** | **Đã cài và bật cho blog 1** (`DOTT_SINGLE_CACHE_BLOGS = array(1)`, 28/11 13:17). Option khi đọc ra: blog 1 `do_caching_mobile_files=0`, blog 2 `=1`. **File `wp-rocket-config/diaocthongthai.com.php` CHƯA được tạo lại** (vẫn `do_caching_mobile_files = 1`, 09/03), nên cách phục vụ cache chưa đổi. Xem cảnh báo ở mục 4 |
 | Theme | **vi: generatepress_child v0.7.0 có tt-core, đã build (28/11 16:58, P2 xong).** Bản render mới dùng một `core.js` cho desktop và mobile. en: chưa có tt-core. Backup `/root/backup-p2-2026-11-28/` |
@@ -59,11 +60,8 @@ Chạy `dott-cache` không tham số để xem đủ cờ.
 **Lần 1, site vi (`-blog /`):**
 1. ~~P2~~ xong 28/11 (rollout-log "P2 + P3 production site vi").
 2. ~~P3~~ xong 28/11.
-3. **P4 (kế tiếp):**
-   - Cài `export-urls.php` và `replace-cache.php` vào `mu-plugins/dott-cache/`.
-   - **Tạo lại file config WP Rocket của blog 1**, để `do_caching_mobile_files = 0` có hiệu lực (ví dụ lưu thiết lập WP Rocket trong admin site vi, hoặc `wp --url=https://diaocthongthai.com/ eval 'rocket_generate_config_file();'`).
-   - Từ lúc này, thư mục còn `.mobile-active` sẽ được PHP trả bản desktop cho cả khách mobile.
-4. **P5:** tắt phần vi của 2 cron cũ (hoặc tắt hẳn nếu chấp nhận en không còn cron cũ). Dừng các screen sót (`en-map-of`, `F1`, `F2`).
+3. ~~P4~~ xong 28/11 17:05 (rollout-log "P4 production site vi"). Thư mục còn `.mobile-active` giờ được PHP trả **bản desktop cũ (JS desktop cũ)** cho khách mobile, cho tới khi cache được tạo lại ở P6, nên **nên làm P5–P7 sớm**.
+4. **P5 (kế tiếp):** tắt phần vi của 2 cron cũ (hoặc tắt hẳn nếu chấp nhận en không còn cron cũ). Dừng các screen sót (`en-map-of`, `F1`, `F2`).
 5. **P6:**
    - Đổi config VPS phụ thành `write_blogs: ["/"]`.
    - `dott-cache urls sync -site diaocthongthai.com` (cần `export-urls.php` ở P4).

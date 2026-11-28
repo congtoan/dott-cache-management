@@ -707,5 +707,22 @@ Dữ liệu test để lại trên php81: excerpt của bài 150 có chữ "t0�
 - **Chưa đổi:** file `wp-rocket-config` (P4). WP Rocket vẫn tách cache mobile; HTML cache cũ vẫn trỏ JS cũ (giữ theo `LEGACY-FILES.md`). Bản cache mới (desktop và mobile) dùng `core.js`.
 - **Quay lại:** giải nén 2 file backup đè lên, rồi đợi 3 phút OPcache.
 
+### P4 production site vi: tạo lại config WP Rocket blog 1, cài export-urls + replace-cache (28/11 17:05, chủ site yêu cầu)
+- **Backup:** `/root/backup-p4-2026-11-28/wp-rocket-config/` (cả thư mục) và `mu-dott-cache/`.
+- **mu-plugins/dott-cache:** cài `export-urls.php` (có `--ids`) và `replace-cache.php`; `php -l` đạt; `--export-urls --ids=1:p0` chạy (boot 0,8–1,0 s, 3 blog `/ /en/ /es/`).
+- **Tạo lại config blog 1** (`wp --url=https://diaocthongthai.com/ eval 'rocket_generate_config_file();'`). Option trước đó: `cache_mobile=1`, `do_caching_mobile_files=0` (do mu-plugin `dott-single-cache`).
+  - Chỉ `diaocthongthai.com.php` đổi; `diaocthongthai.com.en.php` không đổi (md5 như cũ).
+  - So dòng với bản 09/03:
+    - `$rocket_do_caching_mobile_files` 1 → 0 (mục tiêu);
+    - thêm 20 tham số theo dõi được bỏ qua (`hsa_*`, `_hsenc`, `mtm_kwd`…: mặc định mới của WP Rocket, URL có các tham số này vẫn dùng cache);
+    - `$rocket_cache_query_strings` `['q']` → rỗng (thiết lập admin đã rỗng từ lâu, chỉ chưa tạo lại file).
+  - Đánh giá `?q=`: log hôm nay 1.235 lượt `/search/?q=`, **1.185 URL khác nhau**, 1.181 là bingbot. Cache cho `?q=` hầu như không trúng (khoảng 4%), nên bỏ không làm tăng tải đáng kể. Giữ nguyên.
+- **Kiểm tra** (sau 3 phút OPcache; file config được `advanced-cache.php` nạp):
+  1. Thư mục còn `.mobile-active` (`/cac-thanh-pho-cua-my/`): iPhone nhận **bản desktop** (`cached@` của file desktop) qua PHP (nginx BYPASS). Đây là HTML cũ, JS desktop cũ: khách mobile của các trang này nhận JS desktop cho tới khi cache được tạo lại (P6).
+  2. Xóa cache 1 bài (`/thanh-pho-huntington-bang-west-virginia/`), request iPhone đầu tiên: chỉ tạo `index-https.html` + `_gzip`, **không có file mobile, không có `.mobile-active`**. Lần sau iPhone và desktop đều nginx **HIT** cùng file, có `tt-core/core.js`.
+  3. en (`/en/abkhazia-maps/`): iPhone vẫn nhận file mobile (md5 khác desktop; 2 file cùng kích thước nhưng khác nội dung). Không đổi.
+  4. Error log PHP: không có lỗi mới.
+- **Quay lại:** chép `/root/backup-p4-2026-11-28/wp-rocket-config/diaocthongthai.com.php` đè lên, đợi 3 phút. Lưu thiết lập WP Rocket trong admin site vi sẽ tạo lại file theo option hiện tại (`do_caching_mobile_files=0` chừng nào mu-plugin còn bật cho blog 1).
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.
