@@ -1,4 +1,4 @@
-# HANDOFF – Cache System v2 (cập nhật 2026-11-28 18:10)
+# HANDOFF – Cache System v2 (cập nhật 2026-11-29 01:52)
 
 > Điểm bắt đầu cho hội thoại mới. **Đọc file này trước.** Tra cứu khi cần:
 > - [docs/SUMMARY-2026-11-28.md](docs/SUMMARY-2026-11-28.md): tổng kết ngày 28/11 (đã làm gì, kết quả);
@@ -21,7 +21,7 @@
 - nginx trả thẳng file cache; S3 chỉ có `index-https.html`; Worker v2 chọn bucket theo châu lục.
 - **Cập nhật theo sự kiện** (mu-plugin → tunnel → `serve` → pool) + **đối soát hằng ngày** (`reconcile`) + **toàn site hằng tháng** (`submit -all`). Bỏ lịch `sync` 8 giờ/lần.
 - Site là nguồn sự thật; KV/S3/đĩa là trạng thái thật; `state.db` (danh sách URL) sẽ bỏ sau khi pool chạy ổn trên production.
-- Chuyển production từng blog: **vi đã chuyển (28/11)**, en làm lần 2.
+- Chuyển production từng blog: **vi và en đã chuyển (28/11)**; pool production bật 29/11 01:45 (P8).
 
 ## 2. Lệnh `dott-cache` (VPS phụ)
 ```
@@ -37,51 +37,28 @@ dott-cache urls sync|list|stats ...; update -all|-url|-txt|-segment ... -blog / 
 - `write_blogs` trong config: chỉ cho ghi các blog được liệt kê.
 - Log `serve`: `journalctl -u dott-cache-serve`, kết quả từng URL `logs/<site>/serve-YYYYMMDD.jsonl`.
 
-## 3. Trạng thái (28/11 18:10)
+## 3. Trạng thái (29/11 01:52): cả 2 blog đã chuyển, pool production đang chạy
 
-**Production site vi (blog 1): đã chuyển.**
-| Thành phần | Trạng thái |
-|---|---|
-| Theme | generatepress_child **v0.7.0** (tt-core, build 19 module, `core.js?ver=62d9b17e24`). Backup `/root/backup-p2-2026-11-28/` |
-| Plugin sticky | **3.2.0** (network). Module sticky trong build vi; en chạy như cũ |
-| WP Rocket config blog 1 | Tạo lại 17:05: `do_caching_mobile_files = 0`. Backup `/root/backup-p4-2026-11-28/` |
-| mu-plugins | `dott-single-cache.php` (blog 1), `dott-cache/{prefork-render,export-urls (--ids),replace-cache}.php` |
-| Cron cũ, screen | **Đã xóa / đóng** (P5). Backup `/root/backup-p5-2026-11-28/crontab-root.txt` |
-| **P6 `update -all -blog /`** | **Đang chạy nền** từ 17:12 (`systemd-run` unit `dott-p6-vi` trên VPS phụ, log `logs/diaocthongthai.com/p6-update-all-vi.txt`). Đã dọn S3/server/KV; đang render 24.273 URL (lô 10/122 lúc 18:05, 2–2,8 URL/s, dự kiến xong khoảng 20:30–21:00). 1 URL prefork lỗi do wpdatatables ghi file tạm (`tempfile*.csv`, không có quyền ghi), đã thử lại bằng HTTP |
-| Worker | **v2 từ 17:45** (script `thongthai-cache`, route `diaocthongthai.com/*`): NA/SA → S3 Chicago `cdn.diaocthongthai.com`, châu khác → origin. `LEGACY_PREFIXES` đã bỏ lúc 18:30 (en một bản). Quay lại v7: `bash deploy/worker/deploy-production.sh rollback` trên VPS phụ (bản v7 ở `test/p7/v7-live/`) |
-| Config VPS phụ | `write_blogs: ["/"]` |
-| Pool production | **Chưa bật** (chưa có mu-plugin events, file hook; `serve` chỉ phục vụ php81) |
+| Thành phần | vi (blog 1) | en (blog 2) |
+|---|---|---|
+| Theme | generatepress_child v0.7.0, build `62d9b17e24` (19 module). Backup `/root/backup-p2-2026-11-28/` | generatepress_en v0.7.0, build `1cc3bb7b7f` (9 module). Backup `/root/backup-en-2026-11-28/` |
+| Một bản cache | `DOTT_SINGLE_CACHE_BLOGS = array( 1, 2 )`; cả 2 `wp-rocket-config` có `do_caching_mobile_files = 0` (kiểm lại sau khi chủ site lưu thiết lập 21:54/21:56) | như vi |
+| Cache toàn blog | P6 xong 28/11 20:18: 24.272/24.273 (+75 trang phân trang, +66 trang `danh-sach-*`). reconcile: thiếu 1, mồ côi 0 | xong 28/11 23:25 (+ chạy lại 8 URL lỗi PUT 00:30): reconcile thiếu 0, mồ côi 0 |
 
-**Site en (blog 2), lần 2 đang làm (28/11 18:14–18:33, rollout-log mục "Lần 2 site en"):**
-- Bước 1–4 xong: theme `generatepress_en` v0.7.0 (build `1cc3bb7b7f`, 9 module, backup `/root/backup-en-2026-11-28/`); `DOTT_SINGLE_CACHE_BLOGS = array( 1, 2 )`; config WP Rocket `.en` tạo lại (`do_caching_mobile_files=0`); Worker **bỏ `LEGACY_PREFIXES`** (18:30).
-- P6 vi xong 20:18 (24.272/24.273; `/cong-bo-du-an-the-western-capital/` bị Rank Math redirect 301, chờ chủ site chọn bỏ redirect hay `exclude`).
-- **`export-urls.php` đã sửa trên production (20:53):** số trang archive tính bằng truy vấn chính (trước đây thiếu phân trang của chuyên mục cha: en 2.464 trang, vi 75); `--ids` trả thêm chuyên mục cha. 75 trang vi đã render. **php81 chưa cập nhật bản này.**
-- **Bước 5 xong** (20:57–23:25, chạy lại 8 URL lỗi PUT lúc 00:30): `write_blogs: ["/", "/en/"]`; reconcile en thiếu 0, mồ côi 0; NA desktop = iPhone `S3-NA`. **Site en đã chuyển.**
-- 70 URL vừa bỏ exclude (`danh-sach-*`, `/en/list-of-all-*`) đã render (vi 66, en 4).
-- **Việc kế tiếp: P8** (pool cho cả 2 blog, [docs/plan-P8.md](docs/plan-P8.md)). Cho tới khi có P8, bài sửa không tự lên cache.
-
-**VPS phụ:**
-- `dott-cache-serve.service` (`-sites php81.congtoan.net`) và `dott-cache-tunnel.service` đang chạy, **chưa enable**.
-- `serve` giữ khóa site php81: lệnh ghi CLI cho php81 bị từ chối (dùng `submit` hoặc dừng serve).
-- Key tunnel `/root/.ssh/id_dott_tunnel`, alias `main-tunnel`. Trên VPS chính: `restrict,port-forwarding,permitlisten="127.0.0.1:8790",permitopen="127.0.0.1:1",command="/bin/false"`. Backup `authorized_keys.bak-2026-11-28-1626`.
-- Token hook php81: `config/secrets/hook-php81.congtoan.net.token`; trên site: `/home/php81conZSI/php81.congtoan.net/dott-cache-hook.json`.
+- Plugin sticky **3.2.0** (network). Cron cũ, screen: đã xóa (P5, backup `/root/backup-p5-2026-11-28/`).
+- mu-plugins: `dott-single-cache.php`, `dott-cache-events.php` (từ 29/11 01:44), `dott-cache/{prefork-render, export-urls, replace-cache}.php`. **`export-urls.php` sửa 28/11 20:53**: số trang archive bằng truy vấn chính (trước đây thiếu phân trang chuyên mục cha), `--ids` có chuyên mục cha. php81 chưa cập nhật bản này.
+- **Worker v2** (script `thongthai-cache`, từ 28/11 17:45; `LEGACY_PREFIXES` bỏ 18:30): NA/SA → S3 Chicago, châu khác → origin. Quay lại v7: `bash test/p7/deploy-production.sh rollback` trên VPS phụ.
+- **Pool production (P8, 29/11 01:45):** `serve -sites php81.congtoan.net,diaocthongthai.com` (enable), tunnel (enable), file hook `/home/diaocthDP4f/diaocthongthai.com/dott-cache-hook.json`. Sửa bài → S3 mới sau khoảng 10 s. Timer: reconcile vi/en 03:30 hằng ngày; `submit-all` vi ngày 1, en ngày 15 (04:00). `serve` giữ khóa site production: lệnh CLI ghi phải qua `submit`.
+- Config VPS phụ: `write_blogs: ["/", "/en/"]`; 8 exclude `danh-sach-*`, `/en/list-of-all-*` đã bỏ (28/11 22:00).
+- Key tunnel `/root/.ssh/id_dott_tunnel` (alias `main-tunnel`, `restrict,port-forwarding,permitlisten="127.0.0.1:8790",…`). Token hook: `config/secrets/hook-<site>.token`.
 
 ## 4. Việc tiếp theo
-1. **Khi P6 xong** (`systemctl is-active dott-p6-vi` = inactive):
-   - đọc cuối log `p6-update-all-vi.txt` (số ok/lỗi, kiểm tra lại);
-   - `dott-cache reconcile -site diaocthongthai.com -blog / -dry-run` (không cần serve khi dry-run) để xem thiếu/mồ côi;
-   - kiểm tra vài URL desktop/iPhone (nginx HIT, `core.js`), S3 không còn mobile/`_gzip`;
-   - ghi kết quả vào rollout-log mục P6.
-2. **P8, bật pool cho production cả 2 blog** (sau khi en chuyển xong): kế hoạch chi tiết [docs/plan-P8.md](docs/plan-P8.md). Phương án `legacy_blogs` cho en đã bỏ (en chuyển hẳn trong ngày 28/11). Tóm tắt (hỏi chủ site trước):
-   - token `hook-diaocthongthai.com.token`, file `/home/diaocthDP4f/diaocthongthai.com/dott-cache-hook.json` (600, user site);
-   - cài `mu-plugins/dott-cache-events.php` vào production;
-   - `serve -sites php81.congtoan.net,diaocthongthai.com` (sửa unit), `systemctl enable --now dott-cache-serve dott-cache-tunnel`;
-   - cài `dott-cache-reconcile@vi.timer` (03:30), hằng tháng `dott-cache-blog.sh vi submit-all`;
-   - test: sửa một bài vi và xem log serve. Lưu ý `serve` sẽ giữ khóa site production, nên CLI `update` phải chạy qua `submit`.
-3. **Đo** tốc độ khách Việt Nam với Worker v2 (châu Á vào origin) so với trước.
-4. **Lần 2, site en:** bước 1–4 xong (xem mục 3). Còn bước 5 (sau P6): backup config, `write_blogs: ["/", "/en/"]`, `urls sync`, `update -all -blog /en/` không `-yes` để kiểm kê (báo số URL, file kiểu cũ S3/server, mồ côi ≤ 2%), rồi `systemd-run --unit=dott-update-en --collect -p MemoryMax=400M -p Nice=10 -p CPUQuota=50% …` (4–5 giờ), kiểm tra vài URL. Sau đó P8 cho cả 2 blog.
-5. Sau P8: `submit -stale` (làm mới theo tuổi `cached@`, từ cũ tới mới, mỗi đêm một phần): thiết kế và số đo ở [design-pool.md mục 8b](docs/design-pool.md).
-6. Sau khi pool ổn: bỏ `state.db`, `urls sync`, `sync`, lệnh `renew`, `regen-all`; dọn php81 (theo ý chủ site).
+1. **Chủ site sửa thử 1 bài thật trong admin** (vi, rồi en) và xem `journalctl -u dott-cache-serve -f` trên VPS phụ: Gutenberg gửi 2 request, chưa test trên production. Sau đó theo dõi lượt reconcile 03:30 đầu tiên (`journalctl -u dott-cache-reconcile@vi`).
+2. `/cong-bo-du-an-the-western-capital/`: bài publish nhưng Rank Math redirect 301 về trang chủ. Chủ site chọn bỏ redirect hay thêm vào `exclude` (nếu không, reconcile sẽ đưa vào pool mỗi ngày và lỗi).
+3. Cập nhật `export-urls.php` mới cho php81 (cùng bản production).
+4. **Đo** tốc độ khách Việt Nam với Worker v2 (châu Á vào origin) so với trước.
+5. `submit -stale` (làm mới theo tuổi `cached@`): [design-pool.md mục 8b](docs/design-pool.md).
+6. Sau khi pool ổn: bỏ `state.db`, `urls sync`, `sync`, `renew`, `regen-all`; dọn php81 (theo ý chủ site).
 
 **Còn mở:**
 - Chủ site **đổi mật khẩu** đăng nhập diaocthongthai.com và php81 (đã dán trong hội thoại 28/11), và **đổi 2 token Cloudflare** đã dán ngày 28/11.

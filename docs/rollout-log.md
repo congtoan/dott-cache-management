@@ -826,5 +826,23 @@ Dữ liệu test để lại trên php81: excerpt của bài 150 có chữ "t0�
 - Cần xem khi en xong: `/en/test-cache/` có trong `cache_reject_uri` của en nhưng nằm trong DB, nên có thể là URL lỗi (không có `cached@`). Kết quả: lượt en không có URL nào lỗi render, reconcile thiếu 0.
 - **Kết quả `dott-after-en`** (chạy 23:25–23:28): `urls sync` thêm 70; vi 66/66 ok (prefork, 82 s, KV +66; wpdatatables vẫn báo không ghi được `tempfile187.xlsx`, trang vẫn đạt); en 4/4 ok (HTTP, 59 s, KV +4). `/danh-sach-xa-phuong-viet-nam/` qua Cloudflare (NA): `S3-NA`, desktop = iPhone.
 
+### P8 production: bật pool (sự kiện) cho cả 2 blog (29/11 01:43–01:52, chủ site yêu cầu "làm P8 ngay")
+- **VPS phụ:**
+  - Token `config/secrets/hook-diaocthongthai.com.token` (32 byte hex, 600, không in).
+  - Backup `backup-p8-2026-11-29/` (`dott-cache-blog.sh`, `dott-cache-run.sh`, `dott-cache-serve.service`). Cài bản repo của `dott-cache-blog.sh` (bản trên VPS chưa có `reconcile`/`submit-all`) và `dott-cache-run.sh`; unit `dott-cache-reconcile@`, `dott-cache-submit-all@` (mới), drop-in `dott-cache-submit-all@en.timer.d/override.conf` (ngày 15).
+  - `dott-cache-serve.service`: `-sites php81.congtoan.net,diaocthongthai.com`. Restart 01:43: log `write_blogs [/ /en/]`, `blog map[1:/ 2:/en/ 3:/es/]`. Từ đây `serve` giữ khóa site production: lệnh CLI ghi phải qua `submit`.
+  - `systemctl enable dott-cache-serve dott-cache-tunnel` (trước đó chỉ chạy, chưa enable).
+- **VPS chính:**
+  - `mu-plugins/dott-cache-events.php` (md5 `515785e8…`, giống php81 và repo; site user, 644, `php -l` đạt). Sau khi cài: `/`, `/en/` 200, `wp-login` 302; `curl 127.0.0.1:8790/health` = `ok`.
+  - **Bật 01:45:** `/home/diaocthDP4f/diaocthongthai.com/dott-cache-hook.json` (site user, 600, token 64 ký tự; token đi qua stdin, không in).
+  - `php-error.log`: chỉ có 2 dòng `RedisException: socket error on read socket` lúc 00:23 (một request `admin-ajax`, trước khi cài plugin, sau khi mọi lượt chạy đã xong). Không liên quan, theo dõi thêm.
+- **Test** (gọi thẳng `Dott_Cache_Events::rocket_clean_post()` bằng wp-cli, không bắn cả hook `after_rocket_clean_post`, vì hook này còn 4 listener của WP Rocket xóa cache archive theo ngày/term):
+  - vi `/ban-do-an-do/` (ID 3988): nhận sự kiện → `--ids` 1,6 s → lô 1 URL (http): render 0,4 s, upload+KV 2,9 s. S3 `Last-Modified` 10:21 → 18:46 UTC, `cached@` trên đĩa mới. **9–10 s từ lúc gửi.**
+  - en `/en/map-of-ca-san-francisco/` (ID 97993): `--ids` 2,0 s, render 0,5 s, upload+KV 1,2 s, khoảng 9 s.
+  - Tunnel tắt: `/health` 000, lệnh `wp` 1,1 s (gồm ssh, không chậm), `serve` không nhận gì; bật lại: `ok`. **Không có dòng `error_log`**: `wp_remote_post` với `blocking=false` không trả lỗi khi kết nối bị từ chối, nên sự kiện mất mà không có dấu vết (lưới an toàn: reconcile hằng ngày).
+  - Chưa test trên production: sửa bài thật trong admin (Gutenberg 2 request), bình luận, đổi slug, xóa bài, sửa term. Đã test trên php81 (rollout-log mục "Pool").
+- **Lịch:** `reconcile -blog / -dry-run` 01:50: cần có 24.414, KV 24.414, S3 24.413, thiếu 1 (`/cong-bo-du-an-the-western-capital/`, Rank Math redirect), mồ côi 0. Bật `dott-cache-reconcile@vi/en.timer` (03:30) và `dott-cache-submit-all@vi.timer` (ngày 1, 04:00), `@en.timer` (ngày 15, 04:00). Pool 2 site trống.
+- **Quay lại:** xóa `dott-cache-hook.json` (tắt sự kiện ngay); bỏ hẳn: xóa `mu-plugins/dott-cache-events.php`, `systemctl disable --now` các timer, sửa `-sites` về `php81.congtoan.net` rồi restart serve.
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.
