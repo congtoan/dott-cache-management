@@ -214,6 +214,8 @@ func runRemote(ctx context.Context, host, command, stage string, paths []string,
 			if !quietRemote {
 				fmt.Println("    " + l)
 			}
+		case strings.HasPrefix(l, "THROTTLE "):
+			addThrottle(l[9:])
 		case strings.HasPrefix(l, "PURGE "):
 			lastPurgeRaw = l[6:]
 			lastPurge = purgeSummary(l[6:])

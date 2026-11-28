@@ -15,7 +15,8 @@
  *   printf '/tttest/abc/\n' | dott-prefork php81.congtoan.net
  * Chạy tay:
  *   runuser -u php81conZSI -- php prefork-render.php --root=<public_html> --host=php81.congtoan.net \
- *       --urls=-|file [--parallel=1] [--readonly] [--no-delete | --delete-only] [--out=log.jsonl] [--limit=N]
+ *       --urls=-|file [--parallel=1] [--readonly] [--no-delete | --delete-only] [--max-load=1.5 --resume-load=1.0]
+ *       [--out=log.jsonl] [--limit=N]
  *
  * Đầu vào (--urls, "-" nghĩa là stdin): mỗi dòng một path (/tttest/abc/) hoặc URL https://<host>/...
  * Có thể trộn nhiều blog trong cùng danh sách: path được xếp vào blog có path site dài nhất khớp với nó.
@@ -34,7 +35,7 @@ if ( PHP_SAPI !== 'cli' ) {
 	exit( 1 );
 }
 
-$opt = getopt( '', array( 'root:', 'host:', 'urls:', 'parallel::', 'readonly', 'no-delete', 'delete-only', 'purge-cache', 'all', 'dry-run', 'keep-orphans', 'out::', 'limit::' ) );
+$opt = getopt( '', array( 'root:', 'host:', 'urls:', 'parallel::', 'readonly', 'no-delete', 'delete-only', 'purge-cache', 'all', 'dry-run', 'keep-orphans', 'max-load::', 'resume-load::', 'out::', 'limit::' ) );
 foreach ( array( 'root', 'host', 'urls' ) as $k ) {
 	if ( empty( $opt[ $k ] ) ) {
 		fwrite( STDOUT, "# thiếu --$k\nDONE ok=0 fail=0 skip=0\n" );
@@ -52,7 +53,35 @@ $pf_tmp      = sys_get_temp_dir() . '/dott-prefork-' . getmypid();
 @mkdir( $pf_tmp, 0700 );
 
 const PF_UA          = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36 dott-prefork';
-const PF_CACHE_FILES = array( 'index-https.html', 'index-https.html_gzip', 'index-mobile-https.html', 'index-mobile-https.html_gzip' );
+// File cache của một URL, gồm cả 4 file và .mobile-active của hệ thống cũ (tách bản mobile).
+const PF_CACHE_FILES = array( 'index-https.html', 'index-https.html_gzip', 'index-mobile-https.html', 'index-mobile-https.html_gzip', '.mobile-active' );
+
+/* Điều tiết theo tải (--max-load, --resume-load): trước khi render mỗi URL (kiểm tra mỗi 5 URL),
+ * nếu load 1 phút của máy > max-load thì nghỉ (mỗi lần 2 s) cho tới khi load <= resume-load,
+ * tối đa 60 s mỗi lần. VPS chính có 1 vCPU: một tiến trình prefork chạy liên tục đã chiếm load ≈ 1,
+ * nên phần vượt quá là khách thật đang phải chờ. */
+$pf_max_load    = (float) ( $opt['max-load'] ?? 0 );
+$pf_resume_load = (float) ( $opt['resume-load'] ?? ( $pf_max_load * 0.7 ) );
+$pf_throttle    = array( 'pauses' => 0, 'waited' => 0 );
+function pf_throttle() {
+	global $pf_max_load, $pf_resume_load, $pf_throttle;
+	static $n = 0;
+	if ( $pf_max_load <= 0 || ( $n++ % 5 ) !== 0 ) {
+		return;
+	}
+	$l = sys_getloadavg()[0];
+	if ( $l <= $pf_max_load ) {
+		return;
+	}
+	$pf_throttle['pauses']++;
+	$w = 0;
+	while ( $l > $pf_resume_load && $w < 60 ) {
+		sleep( 2 );
+		$w += 2;
+		$l = sys_getloadavg()[0];
+	}
+	$pf_throttle['waited'] += $w;
+}
 
 function pf_line( $s ) {
 	fwrite( STDOUT, $s . "\n" );
@@ -406,6 +435,7 @@ foreach ( $pf_paths as $path ) {
 			$collect( $pid, $st );
 		}
 	}
+	pf_throttle();
 	// Xóa cache cũ của đúng URL này ngay trước khi render (path đã được lọc ở bước 0).
 	$deleted = 0;
 	if ( $pf_delete ) {
@@ -503,6 +533,9 @@ $p50 = $n ? $stats['ms'][ (int) ( 0.5 * ( $n - 1 ) ) ] : 0;
 $p95 = $n ? $stats['ms'][ (int) ( 0.95 * ( $n - 1 ) ) ] : 0;
 pf_line( sprintf( '# blog %s xong: %d ok, %d lỗi, %.1f s (%.2f URL/s), mỗi URL p50 %.0f ms, p95 %.0f ms (+ boot %d ms một lần)',
 	$pf_group[0], $stats['ok'], $stats['fail'], $total, $stats['ok'] / max( $total, 0.001 ), $p50, $p95, $boot_ms ) );
+if ( $pf_max_load > 0 ) {
+	pf_line( sprintf( 'THROTTLE {"pauses":%d,"waited":%d,"max_load":%.2f}', $pf_throttle['pauses'], $pf_throttle['waited'], $pf_max_load ) );
+}
 fclose( $group_log );
 if ( $out ) {
 	fclose( $out );

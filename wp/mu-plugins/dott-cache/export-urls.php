@@ -33,7 +33,7 @@ if ( PHP_SAPI !== 'cli' ) {
 	exit( 1 );
 }
 
-$opt = getopt( '', array( 'root:', 'host:', 'since::', 'blog-path::' ) );
+$opt = getopt( '', array( 'root:', 'host:', 'since::', 'blog-path::', 'terms::' ) );
 if ( empty( $opt['root'] ) || empty( $opt['host'] ) ) {
 	fwrite( STDOUT, "# thiếu --root/--host\nDONE blogs=0 urls=0\n" );
 	exit( 2 );
@@ -42,6 +42,14 @@ $ex_root  = rtrim( $opt['root'], '/' );
 $ex_host  = strtolower( $opt['host'] );
 $ex_since = isset( $opt['since'] ) ? max( 0, (int) $opt['since'] ) : 0;
 $ex_blog  = $opt['blog-path'] ?? null; // có giá trị: tiến trình con, chỉ xuất một blog
+// --terms=BLOG:TAXONOMY:TERM_ID,...: chỉ xuất bài đơn thuộc các term này (gồm term con, giống trang
+// archive), dùng cho "update -segment". Không xuất archive và trang chủ.
+$ex_terms = array();
+foreach ( array_filter( explode( ',', (string) ( $opt['terms'] ?? '' ) ) ) as $t ) {
+	if ( preg_match( '/^(\d+):([a-z0-9_-]+):(\d+)$/', $t, $m ) ) {
+		$ex_terms[] = array( (int) $m[1], $m[2], (int) $m[3] );
+	}
+}
 
 // Request giả để nạp WordPress đúng blog (multisite theo thư mục con), không có file cache.
 $boot = ( null === $ex_blog ? '/' : rtrim( $ex_blog, '/' ) . '/' ) . 'dott-export-urls-' . getmypid() . '/';
@@ -82,7 +90,8 @@ if ( null === $ex_blog ) {
 	foreach ( $paths as $bp ) {
 		$cmd = escapeshellarg( PHP_BINARY ) . ' ' . escapeshellarg( __FILE__ )
 			. ' --root=' . escapeshellarg( $ex_root ) . ' --host=' . escapeshellarg( $ex_host )
-			. ' --blog-path=' . escapeshellarg( $bp ) . ( $ex_since ? ' --since=' . $ex_since : '' ) . ' 2>/dev/null';
+			. ' --blog-path=' . escapeshellarg( $bp ) . ( $ex_since ? ' --since=' . $ex_since : '' )
+			. ( $ex_terms ? ' --terms=' . escapeshellarg( (string) $opt['terms'] ) : '' ) . ' 2>/dev/null';
 		$p = popen( $cmd, 'r' );
 		while ( false !== ( $l = fgets( $p ) ) ) {
 			$l = rtrim( $l, "\n" );
@@ -129,6 +138,30 @@ function ex_out( array $r ) {
 
 // Bài đơn
 $types = array_values( array_diff( get_post_types( array( 'public' => true ) ), array( 'attachment' ) ) );
+if ( $ex_terms ) {
+	// Chế độ --terms: bài thuộc term (của blog này), rồi dừng.
+	foreach ( $ex_terms as list( $tb, $tax, $tid ) ) {
+		if ( $tb !== $blog_id || ! taxonomy_exists( $tax ) ) {
+			continue;
+		}
+		$ids = get_posts( array(
+			'post_type' => $types, 'post_status' => 'publish', 'posts_per_page' => -1, 'fields' => 'ids',
+			'no_found_rows' => true, 'orderby' => 'ID', 'order' => 'ASC',
+			'tax_query' => array( array( 'taxonomy' => $tax, 'field' => 'term_id', 'terms' => $tid, 'include_children' => true ) ),
+		) );
+		foreach ( array_chunk( $ids, 500 ) as $chunk ) {
+			_prime_post_caches( $chunk, false, false );
+			foreach ( $chunk as $id ) {
+				$path = ex_path( get_permalink( $id ) );
+				if ( null !== $path ) {
+					ex_out( array( 'p' => $path, 'b' => $blog_id, 'k' => 'single', 't' => get_post_type( $id ), 'id' => (int) $id, 'seg' => "$tax:$tid" ) );
+				}
+			}
+		}
+	}
+	$types = array(); // không xuất phần còn lại
+	$ex_since = 1;    // bỏ qua archive và trang chủ ở dưới
+}
 if ( $types ) {
 	$in  = implode( ',', array_map( function ( $t ) use ( $wpdb ) {
 		return $wpdb->prepare( '%s', $t );

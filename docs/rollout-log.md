@@ -427,5 +427,45 @@ Mục đích: mô phỏng diaocthongthai.com để test tt-core, cache một b�
   - Kiểm kê lại sau khi chạy: S3, KV và server đều 0 mồ côi, 0 file kiểu cũ. KV còn đúng 1.448 key.
 - **Load VPS chính:** tối đa **3,54**, trung bình 1,58 (lần trước tối đa 2,04). Khi prefork chạy cùng request lấy HTML để upload, máy 1 vCPU bị quá tải theo từng đợt. **Bắt buộc phải có điều tiết theo load trước khi chạy production.**
 
+### Lệnh `dott-cache update` (gộp tool cũ) và điều tiết theo load (28/11)
+- **Gộp các tool cũ:**
+
+| Tool cũ | Lệnh mới |
+|---|---|
+| `cache_create_from_db.py`, `cache_renew_from_db.py` | `update -all` (= `regen-all` cũ). Bỏ vòng renew vô hạn, thay bằng chạy theo lịch, ví dụ hằng tháng (chưa cài lịch) |
+| `cache-urls-update.py` + `.txt` | `update -txt [file]` (không có file thì dùng `lists/<domain>/update.txt`; chưa có thì tạo file mẫu), `update -urls [a,b]` (không có giá trị thì hỏi nhập), `update -url URL` |
+| `cache-segment-update.py` | `update -segment [link archive,...]` (không có giá trị thì hỏi nhập) với `-segment-mode all\|archive\|posts`. Bài thuộc term được lấy từ site bằng `export-urls.php --terms=BLOG:TAX:ID` (gồm term con, giống trang archive), có lọc theo DB |
+| (mới) | `urls list` lọc DB theo kind, type, blog, regex, `page-max`, ngày sửa, rồi `-out` ra file txt làm đầu vào cho `update -txt` |
+
+- **Với danh sách:**
+  - sắp thứ tự ưu tiên theo DB; URL không có trong DB có cảnh báo;
+  - xóa file kiểu cũ trên S3 của đúng các path đó (LIST trước, 2 đích song song);
+  - tối đa 4 URL thì dùng http, nhiều hơn thì prefork theo lô;
+  - thêm key KV còn thiếu, và chỉ PUT key thiếu, vì mỗi key ghi vào KV đều tính một lượt ghi;
+  - chạy trong terminal thì hỏi xác nhận, trừ khi có `-yes`.
+- `renew` vẫn chạy nhưng nên dùng `update`. Prefork giờ xóa cả `.mobile-active` (5 file kiểu cũ) trước khi render.
+- **Test trên php81:**
+
+| Lệnh | Kết quả |
+|---|---|
+| `-url` (http) | 1/1, 6,1 s |
+| `-urls` nhập qua stdin (5 URL hợp lệ, 1 host khác bị bỏ) | 5/5, thứ tự đúng: trang chủ → bài → archive → phân trang |
+| `-txt` không có giá trị | tạo file mẫu rồi dừng |
+| `urls list -kind single -match ^/tttest/xa- -limit 40 -out` rồi `-txt` | 40/40, 12,4 s |
+| `-segment /tttest/category/cac-nuoc/` | 2 trang archive + 12 bài, 14/14, 5,6 s |
+| `-segment-mode archive` | 2/2 |
+| `urls list -modified-after` | đúng |
+
+- **Điều tiết theo load** (config `throttle`: `max_load` 1.5, `resume_load` 1.0, `max_wait_sec` 300, `pause_sec` 0):
+  - Trước mỗi lô, Go đọc load (`dott-prefork <domain> --loadavg`) và nghỉ nếu cao.
+  - Trong lô, PHP (`--max-load`) kiểm tra mỗi 5 URL, nghỉ tối đa 60 s mỗi lần.
+  - Lô mặc định giảm từ 500 xuống 200, để kiểm tra load thường hơn.
+- **`update -all` trên php81 có điều tiết:**
+  - 1.448/1.448 ok trong 276 s (khi không điều tiết: 142–167 s).
+  - Load lúc bắt đầu đã là 2,14 (có hoạt động khác trên VPS chính), nên tool nghỉ 52 s trước lô đầu. PHP nghỉ 2 lần trong lô (56 s và 26 s).
+  - Load trong lúc chạy: tối đa 2,41, trung bình 1,34, 22% số mẫu > 1,5. Khi không điều tiết: tối đa 3,54, trung bình 1,58.
+  - **Nhận xét:** một tiến trình prefork tự nó đã chiếm load khoảng 1 trên máy 1 vCPU. Phần vượt quá đến từ hoạt động khác (production, PHP-FPM). Load 1 phút phản ứng chậm, nên vẫn có những đợt vượt ngắn.
+  - Muốn chặt hơn thì giảm `max_load` (ví dụ 1,3) và kiểm tra mỗi URL thay vì mỗi 5 URL; đổi lại thời gian chạy sẽ dài hơn. **Chủ site chọn mức trước khi chạy production.**
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.

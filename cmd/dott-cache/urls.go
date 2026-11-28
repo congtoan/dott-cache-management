@@ -55,6 +55,8 @@ func cmdURLs(args []string) {
 		cmdURLSync(args[1:])
 	case "stats":
 		cmdURLStats(args[1:])
+	case "list":
+		cmdURLList(args[1:])
 	default:
 		usage()
 	}
@@ -325,8 +327,13 @@ func cmdURLSync(args []string) {
 	fmt.Printf("đã ghi %s/state.db trong %.1f s (tổng %.1f s)\n", dir, time.Since(started).Seconds()-tExport.Seconds(), time.Since(started).Seconds())
 }
 
+// readExportQuiet: như readExport nhưng không in log.
+func readExportQuiet(r io.Reader) ([]exportURL, bool, error) { return readExportOpt(r, true) }
+
 // readExport đọc các dòng "U {json}" / "# log" / "DONE ..." của export-urls.php.
-func readExport(r io.Reader) ([]exportURL, bool, error) {
+func readExport(r io.Reader) ([]exportURL, bool, error) { return readExportOpt(r, false) }
+
+func readExportOpt(r io.Reader, quiet bool) ([]exportURL, bool, error) {
 	var out []exportURL
 	done := false
 	sc := bufio.NewScanner(r)
@@ -342,9 +349,13 @@ func readExport(r io.Reader) ([]exportURL, bool, error) {
 			out = append(out, u)
 		case strings.HasPrefix(l, "DONE"):
 			done = true
-			fmt.Println("    " + l)
+			if !quiet {
+				fmt.Println("    " + l)
+			}
 		case strings.HasPrefix(l, "# "):
-			fmt.Println("    " + l[2:])
+			if !quiet {
+				fmt.Println("    " + l[2:])
+			}
 		}
 	}
 	return out, done, sc.Err()
@@ -457,6 +468,110 @@ func cmdURLStats(args []string) {
 		fmt.Printf("  %s %-10s xuất %d, thêm %d, sửa %d, mất %d, bỏ %d (%s)\n", time.Unix(st, 0).Format("2006-01-02 15:04"), k, seen, a, c, rm, ex, note)
 	}
 	r2.Close()
+}
+
+// cmdURLList: lọc URL trong DB theo điều kiện, in ra hoặc ghi file txt (đầu vào cho "update -txt").
+//
+//	dott-cache urls list -site <domain> [-kind single|term|pt_archive|home] [-type post|category|map_3...]
+//	    [-blog N] [-match REGEX] [-page-max N] [-modified-after 2026-11-01] [-modified-before 2026-11-28]
+//	    [-status active|removed] [-limit N] [-out lists/<domain>/x.txt]
+func cmdURLList(args []string) {
+	fs := flag.NewFlagSet("urls list", flag.ExitOnError)
+	site := fs.String("site", "", "domain")
+	cfgPath := fs.String("config", "", "file cấu hình JSON")
+	kind := fs.String("kind", "", "single | term | pt_archive | home (nhiều giá trị cách nhau dấu phẩy)")
+	typ := fs.String("type", "", "post type hoặc taxonomy (cách nhau dấu phẩy)")
+	blog := fs.Int("blog", 0, "blog_id")
+	match := fs.String("match", "", "regex trên path")
+	pageMax := fs.Int("page-max", 0, "chỉ lấy trang phân trang <= N (1 = chỉ trang đầu của archive)")
+	after := fs.String("modified-after", "", "bài sửa từ ngày (YYYY-MM-DD, giờ VN)")
+	before := fs.String("modified-before", "", "bài sửa trước ngày (YYYY-MM-DD, giờ VN)")
+	status := fs.String("status", "active", "active | removed")
+	limit := fs.Int("limit", 0, "tối đa N URL")
+	out := fs.String("out", "", "ghi ra file (mặc định in ra màn hình)")
+	fs.Parse(args)
+	cfg := loadConfig(resolveConfig(*cfgPath, *site))
+	db, err := store.Open(siteData(*site, cfg))
+	if err != nil {
+		die("%v", err)
+	}
+	defer db.Close()
+	q := `SELECT path FROM urls WHERE status = ?`
+	qa := []any{*status}
+	in := func(col, v string) {
+		parts := strings.Split(v, ",")
+		q += " AND " + col + " IN (" + strings.TrimSuffix(strings.Repeat("?,", len(parts)), ",") + ")"
+		for _, p := range parts {
+			qa = append(qa, strings.TrimSpace(p))
+		}
+	}
+	if *kind != "" {
+		in("kind", *kind)
+	}
+	if *typ != "" {
+		in("obj_type", *typ)
+	}
+	if *blog > 0 {
+		q += " AND blog_id = ?"
+		qa = append(qa, *blog)
+	}
+	if *pageMax > 0 {
+		q += " AND page <= ?"
+		qa = append(qa, *pageMax)
+	}
+	vn := time.FixedZone("ICT", 7*3600)
+	for _, d := range []struct {
+		v, op string
+	}{{*after, ">="}, {*before, "<"}} {
+		if d.v == "" {
+			continue
+		}
+		t, err := time.ParseInLocation("2006-01-02", d.v, vn)
+		if err != nil {
+			die("ngày %q: %v", d.v, err)
+		}
+		q += " AND modified " + d.op + " ?"
+		qa = append(qa, t.Unix())
+	}
+	q += " ORDER BY blog_id, kind, path"
+	var re *regexp.Regexp
+	if *match != "" {
+		if re, err = regexp.Compile(*match); err != nil {
+			die("-match: %v", err)
+		}
+	}
+	rows, err := db.Query(q, qa...)
+	if err != nil {
+		die("%v", err)
+	}
+	var res []string
+	for rows.Next() {
+		var p string
+		rows.Scan(&p)
+		if re != nil && !re.MatchString(p) {
+			continue
+		}
+		res = append(res, p)
+		if *limit > 0 && len(res) >= *limit {
+			break
+		}
+	}
+	rows.Close()
+	body := strings.Join(res, "\n")
+	if len(res) > 0 {
+		body += "\n"
+	}
+	if *out == "" {
+		fmt.Print(body)
+		fmt.Fprintf(os.Stderr, "%d URL\n", len(res))
+		return
+	}
+	hdr := fmt.Sprintf("# dott-cache urls list %s (%s): %d URL\n", strings.Join(args, " "), time.Now().Format("2006-01-02 15:04"), len(res))
+	os.MkdirAll(filepath.Dir(*out), 0o750)
+	if err := os.WriteFile(*out, []byte(hdr+body), 0o640); err != nil {
+		die("%v", err)
+	}
+	fmt.Printf("đã ghi %d URL vào %s\n", len(res), *out)
 }
 
 func sumMap(m map[string]int) int {

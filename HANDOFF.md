@@ -113,6 +113,13 @@ Header S3 phải giữ khi upload: `ContentType: text/html`, `CacheControl: publ
   - Chặn khi DB chưa sync toàn bộ trong 26 giờ, hoặc số mồ côi vượt 2%; `-force` để bỏ qua, `-keep-orphans` để chỉ báo cáo.
   - Lần test thứ 2: 167 s, load tối đa 3,54.
 
+- **`dott-cache update` (28/11)** gộp các tool cũ:
+  - `-all`: thay `cache_create` và `cache_renew`, chạy theo lịch hằng tháng (chưa cài lịch);
+  - `-txt [file]`, `-urls [a,b]`, `-url`: thay `cache-urls-update`;
+  - `-segment [link]` với `-segment-mode`: thay `cache-segment-update`.
+  - Thêm `urls list` để lọc DB rồi xuất txt.
+  - Điều tiết theo load đã có (Go trước mỗi lô, PHP trong lô). Trên php81: 276 s, load tối đa 2,41 (khi không điều tiết: 3,54). Mức `max_load` cho production chờ chủ site chọn.
+
 ## 5. Việc tiếp theo (chủ site chọn)
 1. **Service `dott-cache` có hàng đợi** (SQLite, nhận sự kiện từ mu-plugin trên php81, render bằng HTTP hoặc prefork, upload nhiều đích), test trên php81 với bucket test.
 2. Đo prefork trên production (chỉ đọc, không ghi cache), khi chủ site cho phép.

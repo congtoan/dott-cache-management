@@ -1,11 +1,14 @@
 package main
 
-// Lệnh regen-all: tạo lại cache cho TOÀN BỘ URL active trong DB (khi có thay đổi chung cho cả site:
-// plugin mới, sửa theme...).
+// "update -all" (tên cũ: regen-all): tạo lại cache cho TOÀN BỘ URL active trong DB (khi có thay đổi chung
+// cho cả site: plugin mới, sửa theme...; và chạy theo lịch, vd hằng tháng, thay cho vòng renew vô hạn cũ).
 //
-//	dott-cache regen-all -site <domain>                 # chỉ kiểm kê và in kế hoạch (không xóa, không ghi)
-//	dott-cache regen-all -site <domain> -yes            # chạy thật
-//	                     [-batch 500] [-purge-all-first] [-keep-orphans] [-force]
+//	dott-cache update -site <domain> -all               # chỉ kiểm kê và in kế hoạch (không xóa, không ghi)
+//	dott-cache update -site <domain> -all -yes          # chạy thật
+//	                  [-batch 200] [-purge-all-first] [-keep-orphans] [-force]
+//
+// Điều tiết theo load (config "throttle", mặc định max_load 1.5, resume_load 1.0): trước mỗi lô, Go đọc
+// load của VPS chính và nghỉ nếu cao; trong lô, PHP kiểm tra mỗi 5 URL và nghỉ tối đa 60 s mỗi lần.
 //
 // Theo nguyên tắc đã thống nhất: mỗi URL chỉ có MỘT bản cache trên server (index-https.html +
 // index-https.html_gzip, không có bản mobile), và chỉ upload index-https.html lên S3.
@@ -92,11 +95,11 @@ func purgeNum(k string) int {
 }
 
 func cmdRegenAll(args []string) {
-	fs := flag.NewFlagSet("regen-all", flag.ExitOnError)
+	fs := flag.NewFlagSet("update -all", flag.ExitOnError)
 	site := fs.String("site", "", "domain")
 	cfgPath := fs.String("config", "", "file cấu hình JSON")
 	yes := fs.Bool("yes", false, "chạy thật (không có cờ này thì chỉ kiểm kê và in kế hoạch)")
-	batch := fs.Int("batch", 500, "số URL mỗi lô prefork")
+	batch := fs.Int("batch", 200, "số URL mỗi lô prefork (lô nhỏ thì điều tiết theo load kịp hơn)")
 	purgeFirst := fs.Bool("purge-all-first", false, "xóa hết file cache trên server ngay từ đầu")
 	keepOrphans := fs.Bool("keep-orphans", false, "KHÔNG xóa cache mồ côi (URL không còn trong DB) trên server, S3, KV")
 	force := fs.Bool("force", false, "bỏ qua kiểm tra DB cũ / số mồ côi vượt ngưỡng")
@@ -142,7 +145,7 @@ func cmdRegenAll(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	start := time.Now()
-	fmt.Printf("regen-all %s: %d URL trong DB, %d đích (%s), lô %d\n", cfg.Origin.Host, len(paths), len(clients), targetsDesc(cfg.Targets), *batch)
+	fmt.Printf("update -all %s: %d URL trong DB, %d đích (%s), lô %d\n", cfg.Origin.Host, len(paths), len(clients), targetsDesc(cfg.Targets), *batch)
 
 	// ---- 1. Kiểm kê ----
 	t := time.Now()
@@ -305,51 +308,17 @@ func cmdRegenAll(args []string) {
 	}
 	wg.Wait()
 
-	// ---- 5. Prefork theo lô + upload song song ----
+	// ---- 5. Prefork theo lô (có điều tiết theo load) + upload song song ----
 	cfg.Origin.MinCachedAt = start.Unix() - 5
 	col := newCollector(*logPath)
 	tRender := time.Now()
-	upQ := make(chan []string, 2)
-	upDone := make(chan struct{})
-	var tUpload time.Duration
-	go func() {
-		for b := range upQ {
-			t0 := time.Now()
-			runUpload(ctx, cfg, b, []string{"index-https.html"}, clients, col.ch)
-			tUpload += time.Since(t0)
-		}
-		close(upDone)
-	}()
-	nb := (len(paths) + *batch - 1) / *batch
-	okTotal, retryTotal := 0, 0
-	for i := 0; i < len(paths); i += *batch {
-		if ctx.Err() != nil {
-			break
-		}
-		end := min(i+*batch, len(paths))
-		b := paths[i:end]
-		t0 := time.Now()
-		ok, failed, err := runRemoteQuiet(ctx, cfg.Renew.SSHHost, cfg.Renew.Command, b, col.ch)
-		if err != nil {
-			fmt.Printf("[5] lô %d/%d: LỖI %v\n", i / *batch + 1, nb, err)
-		}
-		var retry []string
-		for p, e := range failed {
-			if retryableByHTTP(e) {
-				retry = append(retry, p)
-			}
-		}
-		sort.Strings(retry)
-		okTotal += len(ok)
-		retryTotal += len(retry)
-		fmt.Printf("[5] lô %d/%d: prefork %d/%d ok, %d thử lại bằng HTTP, %.1f s (%.1f URL/s)\n",
-			i / *batch + 1, nb, len(ok), len(b), len(retry), time.Since(t0).Seconds(), float64(len(ok))/time.Since(t0).Seconds())
-		upQ <- append(ok, retry...)
-	}
-	close(upQ)
-	<-upDone
+	gs := generate(ctx, cfg, clients, paths, *batch, col, "5")
 	all := col.finish()
-	fmt.Printf("[5] prefork + upload: %.1f s (upload chạy song song, tổng thời gian upload %.1f s)\n", time.Since(tRender).Seconds(), tUpload.Seconds())
+	fmt.Printf("[5] prefork + upload: %.1f s (upload chạy song song, tổng %.1f s); điều tiết: nghỉ trước lô %d lần (%.0f s), PHP nghỉ %d lần (%d s), load cao nhất trước lô %.2f\n",
+		time.Since(tRender).Seconds(), gs.tUpload.Seconds(), gs.waits, gs.waited.Seconds(), gs.phpPauses, gs.phpWaited, gs.maxLoad)
+	if kvc != nil {
+		kvEnsure(ctx, kvc, cfg, paths, all, len(clients), "5")
+	}
 
 	// ---- 6. Kiểm tra lại ----
 	t = time.Now()
@@ -392,7 +361,7 @@ func cmdRegenAll(args []string) {
 
 	summary(all, time.Since(start), cfg.Targets)
 	bad := failedPaths(paths, all, len(clients))
-	fmt.Printf("\nregen-all xong: %d/%d URL ok, %d URL chưa xong, tổng %.1f s (%.1f URL/s)\n",
+	fmt.Printf("\nupdate -all xong: %d/%d URL ok, %d URL chưa xong, tổng %.1f s (%.1f URL/s)\n",
 		len(paths)-len(bad), len(paths), len(bad), time.Since(start).Seconds(), float64(len(paths)-len(bad))/time.Since(start).Seconds())
 	if *logPath != "" {
 		fmt.Printf("log: %s\n", *logPath)

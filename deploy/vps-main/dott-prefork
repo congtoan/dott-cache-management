@@ -31,6 +31,9 @@ for a in "$@"; do
     --no-delete|--delete-only|--purge-cache|--all|--dry-run|--keep-orphans) extra+=("$a") ;;
     --export-urls) export_urls=1 ;;
     --since=[0-9]*) [[ "$a" =~ ^--since=[0-9]+$ ]] && extra+=("$a") ;;
+    --terms=*) [[ "$a" =~ ^--terms=[0-9]+:[a-z0-9_-]+:[0-9]+(,[0-9]+:[a-z0-9_-]+:[0-9]+)*$ ]] && extra+=("$a") ;;
+    --max-load=*|--resume-load=*) [[ "$a" =~ ^--(max|resume)-load=[0-9]+(\.[0-9]+)?$ ]] && extra+=("$a") ;;
+    --loadavg) echo "LOAD $(cut -d' ' -f1 /proc/loadavg) $(nproc)"; exit 0 ;;
     *) echo "# bỏ qua tham số không được phép: $a" ;;
   esac
 done

@@ -35,13 +35,36 @@ import (
 )
 
 type Config struct {
-	Origin  origin.Config     `json:"origin"`
-	Targets []s3.Target       `json:"targets"`
-	S3Env   string            `json:"s3_env"`
-	Headers map[string]string `json:"headers"`
-	Renew   RenewConfig       `json:"renew"`
-	URLs    URLConfig         `json:"urls"`
-	KV      KVConfig          `json:"kv"`
+	Origin   origin.Config     `json:"origin"`
+	Targets  []s3.Target       `json:"targets"`
+	S3Env    string            `json:"s3_env"`
+	Headers  map[string]string `json:"headers"`
+	Renew    RenewConfig       `json:"renew"`
+	URLs     URLConfig         `json:"urls"`
+	KV       KVConfig          `json:"kv"`
+	Throttle ThrottleConfig    `json:"throttle"`
+	Lists    string            `json:"lists_dir"` // thư mục danh sách URL (mặc định lists/<domain>/)
+}
+
+// ThrottleConfig: điều tiết theo load của VPS chính (1 vCPU: một tiến trình prefork đã chiếm load ≈ 1).
+type ThrottleConfig struct {
+	MaxLoad    float64 `json:"max_load"`     // load 1 phút vượt mức này thì nghỉ (mặc định 1.5)
+	ResumeLoad float64 `json:"resume_load"`  // nghỉ tới khi load <= mức này (mặc định 1.0)
+	MaxWaitSec int     `json:"max_wait_sec"` // nghỉ tối đa bao lâu trước mỗi lô (mặc định 300)
+	PauseSec   int     `json:"pause_sec"`    // nghỉ cố định giữa các lô (mặc định 0)
+}
+
+func (t ThrottleConfig) withDefaults() ThrottleConfig {
+	if t.MaxLoad <= 0 {
+		t.MaxLoad = 1.5
+	}
+	if t.ResumeLoad <= 0 || t.ResumeLoad > t.MaxLoad {
+		t.ResumeLoad = 1.0
+	}
+	if t.MaxWaitSec <= 0 {
+		t.MaxWaitSec = 300
+	}
+	return t
 }
 
 // URLConfig: quy tắc chọn URL cần cache (lệnh "urls sync"). Áp ở VPS phụ, nên đổi quy tắc không phải sửa site.
@@ -89,7 +112,9 @@ func main() {
 		cmdURLs(os.Args[2:])
 	case "kv":
 		cmdKV(os.Args[2:])
-	case "regen-all":
+	case "update":
+		cmdUpdate(os.Args[2:])
+	case "regen-all": // tên cũ của "update -all"
 		cmdRegenAll(os.Args[2:])
 	default:
 		usage()
@@ -98,6 +123,15 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `dùng (thư mục gốc: $DOTT_CACHE_HOME, mặc định /root/tool/cache-system):
+  TẠO / CẬP NHẬT CACHE (server + S3 + KV):
+  dott-cache update -site <domain> -all [-yes] [-force] [-keep-orphans] [-purge-all-first] [-batch 200]
+  dott-cache update -site <domain> -url URL | -urls [a,b,...] | -txt [file] | -segment [link,...] [-segment-mode all|archive|posts]
+                    [-mode auto|http|prefork] [-http-max 4] [-batch 200] [-yes]
+      -urls / -segment không có giá trị: hỏi nhập; -txt không có giá trị: lists/<domain>/update.txt
+  DANH SÁCH URL:
+  dott-cache urls list -site <domain> [-kind ..] [-type ..] [-blog N] [-match REGEX] [-page-max N]
+                    [-modified-after YYYY-MM-DD] [-modified-before ..] [-limit N] [-out file.txt]
+  CŨ (vẫn chạy, nên dùng update): regen-all = update -all; renew -url|-paths
   dott-cache upload -site <domain> -paths paths.txt [-limit N] [-mobile-copy] [-log out.jsonl]
   dott-cache delete -site <domain> -paths paths.txt
   dott-cache renew  -site <domain> (-url URL | -paths paths.txt) [-mode auto|http|prefork] [-http-max 4] [-limit N] [-keep-s3] [-no-delete] [-log out.jsonl]
