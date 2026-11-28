@@ -685,5 +685,27 @@ Dữ liệu test để lại trên php81: excerpt của bài 150 có chữ "t0�
   - Production ước tính: list KV khoảng 47 s (đã đo), export 18 s.
 - Unit `dott-cache-reconcile@.timer` (03:30 hằng ngày) thay `sync@` và `sync-full@`; `dott-cache-blog.sh` có thêm `reconcile`, `submit-all`. **Chưa cài.**
 
+### P2 + P3 production site vi: theme generatepress_child v0.7.0 (tt-core) + sticky 3.2.0 (28/11 16:58, chủ site yêu cầu)
+- **Kiểm tra trước (chỉ đọc):**
+  - `functions.php` production trùng bản chụp 27/11 (gốc của v0.7.0): md5 `04f404df…`.
+  - `thongthai-script.js` và `-mobile.js` production trùng bản chụp, nên module tt-core khớp code đang chạy.
+  - Theme active: blog 1 `generatepress_child`, blog 2 `generatepress_en`. Plugin network 3.0.0.
+- **Backup:** `/root/backup-p2-2026-11-28/generatepress_child.tgz` và `ct-multi-sticky-sidebar-3.0.0.tgz`. Để ngoài `wp-content`, vì một thư mục theme bản sao sẽ hiện như một theme khác.
+- **Theme:** lấy từ tag v0.7.0 (`git archive`, không đổi xuống dòng), chỉ thêm `tt-core/` (200 file) và `LEGACY-FILES.md`, thay `functions.php`. File cũ giữ nguyên. chown site user, 755/644, `php -l` đạt.
+- **Plugin:** zip release v3.2.0 → `rsync --delete` vào `ct-multi-sticky-sidebar`; 644/755, `php -l` mọi file đạt.
+- **Build blog 1:** `lss_generate()`, rồi `wp tt-core build`: ver `62d9b17e24`, 51.871 byte (gốc 91.774), minified, checked, **19 module** gồm `600 ct-multi-sticky-sidebar desktop 3.2.0-… plugin yes`. Blog en không build (theme en chưa có tt-core).
+- **Kiểm tra:**
+  - Ngay sau khi chép: mọi trang 200, `wp-login` 302. Bản render mới vẫn dùng JS cũ (OPcache giữ `functions.php` cũ), đúng đường lui.
+  - Sau 3 phút: bài và trang chuyên mục (`?djtprobe=`) với desktop và iPhone đều chỉ có `tt-core/core.js?ver=62d9b17e24`, cùng kích thước HTML. Khác nhau đúng 1 dòng honeypot (`wpa_field_info`, ngẫu nhiên mỗi lần render).
+  - en: như cũ (desktop `lss-2.js`, iPhone không).
+  - Trình duyệt (phiên admin của chủ site):
+    - desktop 1366 px: `TT.has('ct-multi-sticky-sidebar') = true`, 18 module chạy, `lss-1.js` được tải, cuộn 2.500 px thì widget cột phải vẫn trong khung (sidebar dính);
+    - 888 px: không tải `lss` (`minWidth` 901, đúng);
+    - mobile 375 px: `TT.mobile = true`, 12 module mobile/all, không tải `lss`, không tràn ngang;
+    - không có lỗi console; error log PHP không có lỗi mới.
+  - Trang chuyên mục vẫn tải `lss-1.js`: **đúng với production** (`disableOn.category = false`; cache cũ do 3.0.0 tạo cũng có `lss-1.js`). Câu "vi tắt sticky ở chuyên mục" trong DEPLOY.md của plugin là thiết lập của php81.
+- **Chưa đổi:** file `wp-rocket-config` (P4). WP Rocket vẫn tách cache mobile; HTML cache cũ vẫn trỏ JS cũ (giữ theo `LEGACY-FILES.md`). Bản cache mới (desktop và mobile) dùng `core.js`.
+- **Quay lại:** giải nén 2 file backup đè lên, rồi đợi 3 phút OPcache.
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.

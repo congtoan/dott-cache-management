@@ -46,8 +46,8 @@ Chạy `dott-cache` không tham số để xem đủ cờ.
 | `mu-plugins/dott-cache/prefork-render.php` | Đã cài (P1). `export-urls.php` và `replace-cache.php` **chưa cài** |
 | `/usr/local/sbin/dott-prefork` | Có `diaocthongthai.com` |
 | **mu-plugin `dott-single-cache.php`** | **Đã cài và bật cho blog 1** (`DOTT_SINGLE_CACHE_BLOGS = array(1)`, 28/11 13:17). Option khi đọc ra: blog 1 `do_caching_mobile_files=0`, blog 2 `=1`. **File `wp-rocket-config/diaocthongthai.com.php` CHƯA được tạo lại** (vẫn `do_caching_mobile_files = 1`, 09/03), nên cách phục vụ cache chưa đổi. Xem cảnh báo ở mục 4 |
-| Theme | **Chưa có tt-core** (P2 chủ site làm sau). Theme vẫn chọn `thongthai-script.js` / `-mobile.js` theo `wp_is_mobile()` |
-| Plugin sticky | 3.0.0 (cần 3.2.0, P3) |
+| Theme | **vi: generatepress_child v0.7.0 có tt-core, đã build (28/11 16:58, P2 xong).** Bản render mới dùng một `core.js` cho desktop và mobile. en: chưa có tt-core. Backup `/root/backup-p2-2026-11-28/` |
+| Plugin sticky | **3.2.0 (P3 xong)**; module trong build tt-core của vi; en chạy như cũ |
 | 8 bài vi test | Đã xóa cache trên server rồi tạo lại bằng prefork: chỉ còn `.html` và `_gzip`, nginx trả HIT cho cả mobile. Khách mobile của 8 bài này nhận JS desktop cho tới P2. Danh sách: `test/t8-prod/list.txt` trên VPS phụ |
 | Cron cũ | `cron-cache-clean-v2.py` (phút 10 các giờ 0, 4, 8, 12, 16, 20), `cron-cache-segment-update-v2.py` (3:45, 15:45): **vẫn bật** |
 | Config `config/sites/diaocthongthai.com.json` (VPS phụ) | Đích Chicago `cdn.diaocthongthai.com`, KV `cc831…`. **`write_blogs: ["-"]`: chưa cho ghi blog nào** |
@@ -57,9 +57,9 @@ Chạy `dott-cache` không tham số để xem đủ cờ.
 ## 4. Việc tiếp theo (theo thứ tự)
 
 **Lần 1, site vi (`-blog /`):**
-1. **P2:** deploy theme tt-core cho `generatepress_child` (chủ site làm), build `wp tt-core build`, kiểm tra desktop và mobile.
-2. **P3:** plugin sticky 3.2.0. Plugin dùng chung cả mạng, nhưng an toàn cho en: theme en chưa có tt-core nên plugin chạy như bản cũ.
-3. **P4:**
+1. ~~P2~~ xong 28/11 (rollout-log "P2 + P3 production site vi").
+2. ~~P3~~ xong 28/11.
+3. **P4 (kế tiếp):**
    - Cài `export-urls.php` và `replace-cache.php` vào `mu-plugins/dott-cache/`.
    - **Tạo lại file config WP Rocket của blog 1**, để `do_caching_mobile_files = 0` có hiệu lực (ví dụ lưu thiết lập WP Rocket trong admin site vi, hoặc `wp --url=https://diaocthongthai.com/ eval 'rocket_generate_config_file();'`).
    - Từ lúc này, thư mục còn `.mobile-active` sẽ được PHP trả bản desktop cho cả khách mobile.
