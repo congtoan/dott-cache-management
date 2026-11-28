@@ -1,5 +1,11 @@
 # Kế hoạch P8: bật pool (sự kiện) cho production, cả 2 blog vi và en (soạn 28/11)
 
+> **ĐÃ THỰC HIỆN 29/11 01:43–01:52.** Kết quả và chỗ khác kế hoạch: rollout-log mục "P8 production". Khác kế hoạch:
+> - test bằng cách gọi thẳng hàm của plugin (không bắn cả hook WP Rocket);
+> - khi tunnel tắt **không có** dòng `error_log` (do `blocking=false`);
+> - cài thêm bản repo của `dott-cache-blog.sh` (bản trên VPS chưa có `reconcile`/`submit-all`);
+> - `submit-all@en` dời sang ngày 15 bằng drop-in.
+
 > Làm sau khi cả vi (P6) và en (lần 2: theme tt-core, một bản cache, Worker bỏ `LEGACY_PREFIXES`, `update -all -blog /en/`)
 > đã chuyển xong. Mọi bước ghi trên VPS chính (đánh dấu **[hỏi]**) cần chủ site duyệt.
 >
