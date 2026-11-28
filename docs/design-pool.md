@@ -72,6 +72,53 @@ Upload của lô trước chạy gối đầu với render của lô sau.
 - Đối soát hằng ngày (export + list KV + list S3: thêm cái thiếu, gỡ mồ côi, chặn khi > 2%) và gỡ `state.db`: **đợt sau**, khi pool đã chạy ổn.
 - Trong lúc `serve` chạy, nó giữ khóa site: các lệnh ghi CLI cũ (`update`, `sync`, `replace`) bị từ chối, phải dùng `submit`.
 
+## 8b. Làm mới theo tuổi cache: `submit -stale` (chốt 28/11, làm sau P8)
+Mục tiêu: biết bản cache nào cũ (so với thời gian, hoặc so với nội dung), rồi làm mới từ cũ nhất tới mới nhất, mỗi lần một phần.
+Có thể thay lượt `submit -all` hằng tháng (3–4 giờ mỗi blog) bằng lượt nhỏ hằng đêm.
+
+**Nguồn thời gian: `cached@<unix>` ở cuối file, không dùng mtime.**
+- WP Rocket ghi `cached@` đúng lúc render. `replace-cache.php` (`dott-cache replace`, đổi `?ver=`) ghi đè file mà không render lại:
+  mtime thành mới nhưng nội dung bài vẫn cũ; `cached@` thì không đổi. Mỗi URL còn có 2 file (`.html`, `_gzip`), restore/copy
+  cũng đổi mtime.
+- Không dùng KV metadata (gói miễn phí 1.000 lượt ghi/ngày, tool không PUT key đã có). `Last-Modified` trên S3 là giờ upload,
+  chỉ có ở 1 đích: hợp để đối chiếu S3 với đĩa, không hợp để đo tuổi bản render.
+
+**Đo trên production 28/11 20:06** (63.636 `index-https.html` của vi + en + es, `nice -n 19 ionice -c3`, chỉ đọc, P6 đang chạy):
+
+| | Lần 1 (ổ đĩa nguội) | Lần 2 |
+|---|---|---|
+| PHP: `RecursiveDirectoryIterator` qua mọi file, `fseek` đọc 300 byte cuối | 22,3 s | 9,6 s |
+| Shell: `find -name index-https.html -exec tail -q -c 300 {} +` | 10,4 s (sau PHP, đã ấm một phần) | 4,3 s |
+
+- Cả hai đọc đủ 63.636 file, file nào cũng có `cached@`. Load gần như không đổi (1,25 → 1,28).
+- Bản cache cũ nhất: 2025-10-23 (chủ yếu là blog chưa từng được làm mới).
+
+**Chọn PHP** (dù chậm hơn shell khoảng 2 lần): chênh 5 s không đáng kể với việc chạy hằng đêm; đúng mô hình `dott-prefork`
+(chỉ chạy `prefork-render.php` bằng user của site, không nới quyền bộ chuyển lệnh root); in kết quả có cấu trúc dễ hơn
+tách các dòng `==> file <==` của `tail`. Bản thật duyệt **thư mục** rồi mở thẳng `index-https.html` (như `--purge-cache`),
+không lặp qua mọi file, nên dự kiến còn khoảng 5 s.
+
+**Thiết kế:**
+1. `prefork-render.php --scan-cache [--blog=/en/]`: mỗi dòng `S {"p":"/en/x/","c":<cached_at>,"m":<mtime>,"v":"<ver core.js>"}`,
+   cuối `DONE n=…`. Chỉ đọc. Gọi qua `dott-prefork <domain> --scan-cache` (thêm vào danh sách tham số được phép; giữ khóa chung
+   như `--export-urls` toàn bộ).
+2. `export-urls.php` in thêm `post_modified_gmt` của bài và giờ bình luận được duyệt mới nhất (`m`), và với term: giờ bài mới
+   nhất của term (để biết archive và phân trang có lỗi thời không).
+3. `dott-cache submit -site <d> -stale -blog / [-older 30d] [-before <ngày>] [-ver-not <hash>] [-limit 2000] [-dry-run]`:
+   - quét `cached@` + export, lọc theo một trong các điều kiện:
+     - **bài:** `cached_at < max(post_modified, bình luận mới nhất)`, tức cache cũ hơn nội dung;
+     - **archive, trang chủ, phân trang:** `cached_at <` giờ bài mới nhất của term (lấp chỗ hở hiện tại: trang 2..N chỉ được
+       làm mới ở lượt hằng tháng);
+     - **theo tuổi:** `-older 30d` hoặc `-before <ngày>` (vd mốc đổi menu/widget/theme: production bật
+       `wp-rocket-no-cache-auto-purge`, nên các thay đổi này không sinh sự kiện);
+     - **theo bản JS:** `-ver-not <hash>`, tức trang còn trỏ bản `core.js` cũ, chưa render lại sau lần build theme;
+   - URL có trong export nhưng chưa có file cache: coi như cũ nhất;
+   - đẩy vào pool **mức 4** với `ord = cached_at`, nên pool tự làm **từ cũ nhất tới mới nhất**; sự kiện (mức 1–2) vẫn chen trước;
+   - `-limit` chặn số URL mỗi lần; `-dry-run` in thống kê (số URL theo từng điều kiện, phân bố tuổi theo tháng) và không gửi gì.
+4. Lịch: `dott-cache-stale@<blog>.timer` hằng đêm (vd 02:00, `-limit 2000`, khoảng 15–20 phút prefork). Giữ `submit -all`
+   hằng tháng làm lưới an toàn cho tới khi `-stale` chạy ổn.
+5. Test trước trên php81 (`/tttest/`): tạo bài sửa sau khi render, `replace` để đổi mtime mà không đổi `cached@`, term có bài mới.
+
 ## 9. Bảo mật
 - `serve` bind `127.0.0.1` (quy tắc CLAUDE.md), `MemoryMax`. Không mở cổng public.
 - Tunnel dùng `GatewayPorts no` của VPS chính: cổng 8790 chỉ mở trên loopback VPS chính.

@@ -76,7 +76,8 @@ dott-cache urls sync|list|stats ...; update -all|-url|-txt|-segment ... -blog / 
    - test: sửa một bài vi và xem log serve. Lưu ý `serve` sẽ giữ khóa site production, nên CLI `update` phải chạy qua `submit`.
 3. **Đo** tốc độ khách Việt Nam với Worker v2 (châu Á vào origin) so với trước.
 4. **Lần 2, site en:** bước 1–4 xong (xem mục 3). Còn bước 5 (sau P6): backup config, `write_blogs: ["/", "/en/"]`, `urls sync`, `update -all -blog /en/` không `-yes` để kiểm kê (báo số URL, file kiểu cũ S3/server, mồ côi ≤ 2%), rồi `systemd-run --unit=dott-update-en --collect -p MemoryMax=400M -p Nice=10 -p CPUQuota=50% …` (4–5 giờ), kiểm tra vài URL. Sau đó P8 cho cả 2 blog.
-5. Sau khi pool ổn: bỏ `state.db`, `urls sync`, `sync`, lệnh `renew`, `regen-all`; dọn php81 (theo ý chủ site).
+5. Sau P8: `submit -stale` (làm mới theo tuổi `cached@`, từ cũ tới mới, mỗi đêm một phần): thiết kế và số đo ở [design-pool.md mục 8b](docs/design-pool.md).
+6. Sau khi pool ổn: bỏ `state.db`, `urls sync`, `sync`, lệnh `renew`, `regen-all`; dọn php81 (theo ý chủ site).
 
 **Còn mở:**
 - Chủ site **đổi mật khẩu** đăng nhập diaocthongthai.com và php81 (đã dán trong hội thoại 28/11), và **đổi 2 token Cloudflare** đã dán ngày 28/11.
