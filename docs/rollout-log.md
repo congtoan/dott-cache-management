@@ -556,5 +556,21 @@ Mục đích: mô phỏng diaocthongthai.com để test tt-core, cache một b�
 - **Production** (chỉ đọc): 0/200 file cache cũ do khách tạo có thẻ này; trang chủ vi và en cũng không có.
 - **Bài học:** muốn so với bản HTTP thì phải so với file cache do request thường tạo, không so với bản có query string. Áp dụng cho các lần so sánh sau (kể cả `compare-20.sh`).
 
+### Test 8 bài vi trên production: xóa cache trên server rồi tạo lại bằng prefork (28/11, chủ site giao)
+- **Bài:** `/xa-thanh-luong-vinh-bao/`, `/xa-gia-phong-sau-sap-nhap-2025/`, `/phuong-thong-nhat-tp-buon-ma-thuot/`, `/thanh-pho-schofield-bang-wisconsin/`, `/xa-phuoc-tan-phu-rieng/`, `/xa-binh-an-dong-nai-sau-sap-nhap-2025/`, `/thanh-pho-cherokee-bang-iowa/`, `/phuong-binh-tan-la-gi/`. Danh sách ở `test/t8-prod/list.txt` trên VPS phụ.
+- **Trước:** 6/8 bài có đủ 5 file kiểu cũ; 2 bài có 3 file (`.html`, `_gzip`, `.mobile-active`).
+- `dott-prefork --delete-only` xóa 38 file. Sau đó prefork (mặc định, có xóa từng URL).
+- **Tốc độ:**
+  - 8/8 ok, mỗi URL 530–680 ms (p50 599 ms).
+  - Tổng 68 s, trong đó **60 s là nghỉ vì load > 1,5** ngay lúc bắt đầu (điều tiết làm đúng việc).
+  - Mỗi URL chậm hơn lần đo P1 (p50 215 ms), vì lúc này máy đang bận: load vượt 1,5.
+- **File sau khi tạo:** mỗi bài chỉ có `index-https.html` và `index-https.html_gzip`, **không còn bản mobile, không còn `.mobile-active`**.
+- **nginx (gọi thẳng origin):** desktop và iPhone đều nhận `X-Rocket-Nginx-Serving-Static: HIT`, `Content-Encoding: gzip`, cùng một `cached@`.
+- **Trình duyệt (built-in browser, qua Cloudflare):**
+  - Desktop: trang đúng, nginx HIT, `cached@` của bản prefork, có sidebar, có `lss-1.js`.
+  - Mobile (giả lập 375 px): hiển thị bình thường, không tràn ngang, không có lỗi console ngoài AdSense.
+  - Lỗi AdSense (`No slot size for availableWidth=0`) cũng có ở bài chưa bị đụng tới, nên không liên quan cache.
+- **Đúng như dự đoán, cần lưu ý:** theme production chưa có tt-core, nên khách mobile của 8 bài này nhận **JS bản desktop** (`thongthai-script.js`, `lss-1.js`) thay vì `thongthai-script-mobile.js`. Đây là lý do P2 (tt-core) và P3 (sticky 3.2.0) phải làm trước P4 và P6. **Khôi phục cách tách mobile cho 8 bài:** chạy `dott-prefork --delete-only` cho 8 path, khách truy cập sẽ tạo lại bản desktop, bản mobile và `.mobile-active` qua PHP.
+
 ### Việc không liên quan nhưng cần biết
 - `tmp_update_en_map_of.py` (screen `en-map-of`) lúc 13:47 ngày 27/11 đã chạy tới 30.612/33.079 URL, có 2 lỗi. Không bị đụng tới.
