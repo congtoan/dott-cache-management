@@ -47,15 +47,7 @@ type Config struct {
 	// WriteBlogs: có giá trị (vd ["/"]) thì mọi lệnh ghi (update, replace, sync) phải có -blog thuộc danh sách
 	// này; kv sync toàn namespace bị chặn. Dùng khi chuyển production từng blog.
 	WriteBlogs []string `json:"write_blogs"`
-	// LegacyBlogs: blog CHƯA chuyển sang một bản HTML (vd ["/en/"] trong lúc chuyển từng blog). Chỉ "serve"
-	// ghi các blog này, theo kiểu cũ: xóa cache trên đĩa, GET bằng UA desktop → index-https.html và UA mobile
-	// → index-mobile-https.html, upload cả hai (Worker đọc theo LEGACY_PREFIXES). Không prefork, không nhận
-	// submit -all (mức 4). Lệnh CLI (update, regen, sync...) vẫn chỉ theo write_blogs, nên không đụng được blog này.
-	LegacyBlogs []string `json:"legacy_blogs"`
 }
-
-// UA mobile cho blog kiểu cũ: khớp regex mobile của WP Rocket và của Worker (iPhone).
-const legacyMobileUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1 dott-cache"
 
 // ThrottleConfig: điều tiết theo load của VPS chính (1 vCPU: một tiến trình prefork đã chiếm load ≈ 1).
 type ThrottleConfig struct {

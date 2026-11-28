@@ -66,7 +66,7 @@ dott-cache urls sync|list|stats ...; update -all|-url|-txt|-segment ... -blog / 
    - `dott-cache reconcile -site diaocthongthai.com -blog / -dry-run` (không cần serve khi dry-run) để xem thiếu/mồ côi;
    - kiểm tra vài URL desktop/iPhone (nginx HIT, `core.js`), S3 không còn mobile/`_gzip`;
    - ghi kết quả vào rollout-log mục P6.
-2. **P8, bật pool cho production site vi + en tạm**: kế hoạch chi tiết [docs/plan-P8.md](docs/plan-P8.md) (soạn 28/11, chờ chủ site duyệt). en tạm dùng `legacy_blogs: ["/en/"]` (mã mới trong `serve`: en render HTTP 2 bản desktop + mobile; binary `/tmp/dott-cache-legacy` trên VPS phụ, chưa cài). Tóm tắt (hỏi chủ site trước):
+2. **P8, bật pool cho production cả 2 blog** (sau khi en chuyển xong): kế hoạch chi tiết [docs/plan-P8.md](docs/plan-P8.md). Phương án `legacy_blogs` cho en đã bỏ (en chuyển hẳn trong ngày 28/11). Tóm tắt (hỏi chủ site trước):
    - token `hook-diaocthongthai.com.token`, file `/home/diaocthDP4f/diaocthongthai.com/dott-cache-hook.json` (600, user site);
    - cài `mu-plugins/dott-cache-events.php` vào production;
    - `serve -sites php81.congtoan.net,diaocthongthai.com` (sửa unit), `systemctl enable --now dott-cache-serve dott-cache-tunnel`;

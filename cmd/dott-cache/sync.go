@@ -204,17 +204,6 @@ func tryLockSite(site string, cfg Config) bool {
 // checkWrite: config có "write_blogs" (vd ["/"]) thì chỉ cho ghi khi phạm vi nằm trong một blog được phép.
 // Dùng khi chuyển production từng blog: blog chưa chuyển không bị lệnh nào ghi nhầm.
 func checkWrite(cfg Config, bs *blogScope) {
-	// Blog kiểu cũ (legacy_blogs) chỉ do serve ghi: lệnh CLI ghi theo kiểu một bản HTML sẽ xóa bản mobile.
-	if len(cfg.LegacyBlogs) > 0 {
-		if bs == nil {
-			die("config có legacy_blogs %v: cần -blog", cfg.LegacyBlogs)
-		}
-		for _, b := range cfg.LegacyBlogs {
-			if strings.EqualFold(b, bs.Path) {
-				die("blog %s là legacy_blogs: chỉ serve được ghi (dùng submit -url)", bs.Path)
-			}
-		}
-	}
 	if len(cfg.WriteBlogs) == 0 {
 		return
 	}
